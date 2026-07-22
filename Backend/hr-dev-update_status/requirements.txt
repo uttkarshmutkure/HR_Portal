@@ -1,0 +1,7 @@
+# Candidate Status Update — Cloud Function Dependencies
+# Used by: update_candidate_status.py
+
+functions-framework==3.*
+
+# Google Cloud
+google-cloud-bigquery==3.*

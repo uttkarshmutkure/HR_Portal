@@ -1,0 +1,8 @@
+# HR Screening Pipeline — Cloud Function Dependencies
+# Runtime: Python 3.12
+
+functions-framework==3.*
+google-cloud-bigquery==3.*
+google-cloud-aiplatform>=1.38.0
+google-genai>=0.8.0
+python-dateutil>=2.8.2

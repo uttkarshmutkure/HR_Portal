@@ -1,0 +1,21 @@
+# HR Screening Pipeline — Cloud Function Dependencies
+# Used by: main.py, gcs_trigger.py, FullPipeline.py,
+#           resume_processing.py, jd_processing.py
+
+functions-framework==3.*
+
+# Google Cloud
+google-cloud-storage==2.*
+google-cloud-bigquery==3.*
+google-cloud-aiplatform==1.*
+
+# Gemini / Vertex AI
+google-genai==1.*
+
+# PDF extraction
+PyMuPDF==1.*
+
+# Date math (used in experience calculation)
+python-dateutil==2.*
+# HTTP client (used by main.py to POST results to screening API)
+requests>=2.31.0
