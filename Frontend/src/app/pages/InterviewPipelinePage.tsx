@@ -9,6 +9,7 @@ import { FeedbackTokenService } from '../../services/feedbackTokenService';
 import { EmailService } from '../../services/emailService';
 import { TopCandidate } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
+import { SalaryRules, DEFAULT_SALARY_RULES, GenerateChoiceModal, SalaryDetailsModal } from './OfferGenerationPage';
 
 // ── Shared Interviewer Store ───────────────────────────────────────────────────
 const InterviewerHelper = {
@@ -163,6 +164,8 @@ export default function InterviewPipelinePage() {
   const location        = useLocation();
   const navigate        = useNavigate();
   const jdTitle: string = location.state?.jdTitle ?? jobId ?? 'Job';
+  const restoreTab: RoundTab | undefined = location.state?.restoreTab;
+  const restoreCandidateId: string | undefined = location.state?.restoreCandidateId;
 
   const [refreshKey,    setRefreshKey]    = useState(0);
   const [isRefreshing,  setIsRefreshing]  = useState(false);
@@ -173,10 +176,14 @@ export default function InterviewPipelinePage() {
   };
 
   // ── Tab & selection state (declared early — used in effects below) ──────────
-  const [activeTab,         setActiveTab]         = useState<RoundTab>('round1');
+  const [activeTab,         setActiveTab]         = useState<RoundTab>(restoreTab ?? 'round1');
   const [selectedCandId,    setSelectedCandId]    = useState<string | null>(null);
   const [detailTab,         setDetailTab]         = useState<DetailTab>('pipeline');
   const [feedbackModalCand, setFeedbackModalCand] = useState<TopCandidate | null>(null);
+  const [salaryRules, setSalaryRules] = useState<SalaryRules>(DEFAULT_SALARY_RULES);
+  const [showGenerateChoiceModal, setShowGenerateChoiceModal] = useState(false);
+  const [showSalaryModal, setShowSalaryModal] = useState(false);
+  const [pendingOfferTarget, setPendingOfferTarget] = useState<{ cand: TopCandidate; jdTitle: string } | null>(null);
 
   // ── Live BigQuery profile data ─────────────────────────────────────────────
   const [feedbackData, setFeedbackData] = useState<{ timeline: any[]; feedback: any[] } | null>(null);
@@ -396,13 +403,20 @@ export default function InterviewPipelinePage() {
 
   useEffect(() => {
     const list = candidatesByRound[activeTab];
-    if (list.length > 0) {
-      if (!list.find(c => c.candidate_id === selectedCandId))
-        setSelectedCandId(list[0].candidate_id);
-    } else {
+    if (list.length === 0) {
       setSelectedCandId(null);
+      return;
     }
-  }, [activeTab, refreshKey]);
+    // If we were told to restore a specific candidate (e.g. via back-navigation from Offer Copilot)
+    // and it exists in this tab, select it once, then clear the marker so normal behavior resumes.
+    if (restoreCandidateId && list.find(c => c.candidate_id === restoreCandidateId)) {
+      setSelectedCandId(restoreCandidateId);
+      return;
+    }
+    if (!list.find(c => c.candidate_id === selectedCandId)) {
+      setSelectedCandId(list[0].candidate_id);
+    }
+  }, [activeTab, refreshKey, pipelineCandidates]);
 
   // ── Fetch live profile from BigQuery when candidate changes ────────────────
   useEffect(() => {
@@ -448,6 +462,14 @@ export default function InterviewPipelinePage() {
     } catch (err) {
       console.error("Failed to reject candidate", err);
     }
+  };
+
+  const goToOfferCopilot = (rulesOverride?: SalaryRules) => {
+    if (!pendingOfferTarget) return;
+    navigate(`/jobs/${jobId}/candidates/${pendingOfferTarget.cand.candidate_id}/offer`, {
+      state: { cand: pendingOfferTarget.cand, jdTitle: pendingOfferTarget.jdTitle, salaryRules: rulesOverride ?? salaryRules },
+    });
+    setPendingOfferTarget(null);
   };
 
   // ── CSS ────────────────────────────────────────────────────────────────────
@@ -1169,6 +1191,21 @@ export default function InterviewPipelinePage() {
       <style>{css}</style>
 
       {feedbackModalCand && <InlineFeedbackModal cand={feedbackModalCand} onClose={() => setFeedbackModalCand(null)} />}
+
+      {showGenerateChoiceModal && (
+        <GenerateChoiceModal
+          onContinue={() => { setShowGenerateChoiceModal(false); goToOfferCopilot(); }}
+          onFillSalary={() => { setShowGenerateChoiceModal(false); setShowSalaryModal(true); }}
+          onClose={() => { setShowGenerateChoiceModal(false); setPendingOfferTarget(null); }}
+        />
+      )}
+      {showSalaryModal && (
+        <SalaryDetailsModal
+          rules={salaryRules}
+          onChange={(rules) => { setSalaryRules(rules); goToOfferCopilot(rules); }}
+          onClose={() => { setShowSalaryModal(false); setPendingOfferTarget(null); }}
+        />
+      )}
       
       <div className="pipe-container">
         <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
@@ -1292,7 +1329,8 @@ export default function InterviewPipelinePage() {
                               className="btn-sm primary"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                navigate(`/jobs/${jobId}/candidates/${cand.candidate_id}/offer`, { state: { cand, jdTitle } });
+                                setPendingOfferTarget({ cand, jdTitle });
+                                setShowGenerateChoiceModal(true);
                               }}
                             >
                               Generate Offer →
@@ -1368,7 +1406,10 @@ export default function InterviewPipelinePage() {
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 4 }}>Ready to generate an offer?</div>
                       <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>Open the full-screen AI Copilot to draft and finalise the offer letter.</div>
                       <button
-                        onClick={() => navigate(`/jobs/${jobId}/candidates/${selectedCandidate.candidate_id}/offer`, { state: { cand: selectedCandidate, jdTitle } })}
+                        onClick={() => {
+                          setPendingOfferTarget({ cand: selectedCandidate, jdTitle });
+                          setShowGenerateChoiceModal(true);
+                        }}
                         style={{ background: '#111827', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
                       >
                         Open Offer Copilot →

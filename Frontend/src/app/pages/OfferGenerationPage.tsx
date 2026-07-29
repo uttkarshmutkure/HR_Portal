@@ -61,6 +61,28 @@ const EMPTY_DRAFT: OfferDraft = {
   customValues: {}, 
 };
 
+export interface SalaryRules {
+  basicPercentOfCTC: number;
+  hraPercentOfBasic: number;
+  pfPercentOfBasic: number;
+  medicalAnnual: number;
+  conveyanceAnnual: number;
+  ltaAnnual: number;
+  bonusAnnual: number;
+  offerValidityDays: number;
+}
+
+export const DEFAULT_SALARY_RULES: SalaryRules = {
+  basicPercentOfCTC: 50,
+  hraPercentOfBasic: 50,
+  pfPercentOfBasic: 12,
+  medicalAnnual: 15000,
+  conveyanceAnnual: 19200,
+  ltaAnnual: 12000,
+  bonusAnnual: 0,
+  offerValidityDays: 7,
+};
+
 interface CandidateOfferCard { id: string; name: string; draft: OfferDraft; }
 type ChatMsg = {
   role: 'bot' | 'user';
@@ -143,6 +165,19 @@ export default function OfferGenerationPage() {
   });
 
   const [signature, setSignature] = useState<{ url: string, x: number, y: number } | null>(null);
+  const [salaryRules, setSalaryRules] = useState<SalaryRules>(() => {
+    if (location.state?.salaryRules) return location.state.salaryRules;
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved).salaryRules;
+        if (parsed) return parsed;
+      } catch (e) {}
+    }
+    return DEFAULT_SALARY_RULES;
+  });
+  const [showGenerateChoiceModal, setShowGenerateChoiceModal] = useState(false);
+  const [showSalaryModal, setShowSalaryModal] = useState(false);
 
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
@@ -156,9 +191,9 @@ export default function OfferGenerationPage() {
   // Sync state to local storage whenever it changes
   useEffect(() => {
     if (jobId && candidateId) {
-      localStorage.setItem(storageKey, JSON.stringify({ draft, msgs, templateHtml, customFields }));
+      localStorage.setItem(storageKey, JSON.stringify({ draft, msgs, templateHtml, customFields, salaryRules }));
     }
-  }, [draft, msgs, templateHtml, customFields, jobId, candidateId, storageKey]);
+  }, [draft, msgs, templateHtml, customFields, salaryRules, jobId, candidateId, storageKey]);
 
   // Fetch pipeline candidates for "Copy from candidate" feature
   useEffect(() => {
@@ -195,15 +230,17 @@ export default function OfferGenerationPage() {
     <DashboardLayout breadcrumb={`Dashboard / Jobs / ${jdTitle} / Pipeline / Generate Offer`}>
       <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', padding: '20px 32px', boxSizing: 'border-box' }}>
 
-        {/* Page Header — Hides automatically when conversation starts to maximize vertical space */}
-        {msgs.length === 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20, flexShrink: 0 }}>
-            <button
-              onClick={() => navigate(-1)}
-              style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 8, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', color: TEXT_DARK }}
-            >
-              <ArrowLeft size={16} />
-            </button>
+        {/* Page Header — back button always visible; title/subtitle hide once chat starts to save space
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: msgs.length === 0 ? 20 : 12, flexShrink: 0 }}>
+          <button
+            onClick={() => navigate(`/jobs/${jobId}/pipeline`, {
+              state: { jdTitle, restoreTab: 'onboarding', restoreCandidateId: candidateId },
+            })}
+            style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 8, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', color: TEXT_DARK, flexShrink: 0 }}
+          >
+            <ArrowLeft size={16} />
+          </button>
+          {msgs.length === 0 && (
             <div>
               <h1 style={{ fontSize: 19, fontWeight: 700, color: TEXT_DARK, margin: 0 }}>
                 Generate Offer — {cand.name}
@@ -212,14 +249,17 @@ export default function OfferGenerationPage() {
                 {jdTitle} · {jobId} · Offer Copilot active
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div> */}
 
         {/* Main Workspace */}
-        <div style={{ flex: 1, minHeight: 0, borderRadius: 12, border: `1px solid ${BORDER}`, overflow: 'hidden', display: 'flex'}}>
+        <div style={{ flex: 1, minHeight: 0, borderRadius: 12, border: `1px solid ${BORDER}`, overflow: 'hidden', display: 'flex' }}>
           <OfferChatPanel
             cand={cand} jdTitle={jdTitle} jobId={jobId ?? ''}
             candidateId={candidateId ?? ''}
+            onBack={() => navigate(`/jobs/${jobId}/pipeline`, {
+              state: { jdTitle, restoreTab: 'onboarding', restoreCandidateId: candidateId },
+            })}
             msgs={msgs} draft={draft} input={input} typing={typing}
             savedOffers={savedOffers} OFFER_API={OFFER_API}
             pipelineCandidates={pipelineCandidates}
@@ -239,6 +279,12 @@ export default function OfferGenerationPage() {
             setCustomFields={setCustomFields}
             signature={signature}
             setSignature={setSignature}
+            salaryRules={salaryRules}
+            showGenerateChoiceModal={showGenerateChoiceModal}
+            setShowGenerateChoiceModal={setShowGenerateChoiceModal}
+            showSalaryModal={showSalaryModal}
+            setShowSalaryModal={setShowSalaryModal}
+            setSalaryRules={setSalaryRules}
           />
         </div>
       </div>
@@ -273,6 +319,13 @@ interface OfferChatPanelProps {
   setCustomFields: (val: {name: string, description: string}[]) => void;
   signature: { url: string, x: number, y: number } | null;
   setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number } | null>>;
+  salaryRules: SalaryRules;
+  showGenerateChoiceModal: boolean;
+  setShowGenerateChoiceModal: (val: boolean) => void;
+  showSalaryModal: boolean;
+  setShowSalaryModal: (val: boolean) => void;
+  setSalaryRules: (val: SalaryRules) => void;
+  onBack: () => void;
 }
 
 function OfferChatPanel({
@@ -280,7 +333,9 @@ function OfferChatPanel({
   savedOffers, OFFER_API, pipelineCandidates,
   onSetInput, onSetDraft, onAddUserMsg, onAddBotMsg, onSetTyping,
   onMergeOfferUpdate, onSaveOfferLocal, showToast,
-  templateHtml, setTemplateHtml, customFields, setCustomFields, signature, setSignature
+  templateHtml, setTemplateHtml, customFields, setCustomFields, signature, setSignature,
+  salaryRules, showGenerateChoiceModal, setShowGenerateChoiceModal, showSalaryModal, setShowSalaryModal, setSalaryRules,
+  onBack
 }: OfferChatPanelProps) {
 
   // ── View state machine ──
@@ -438,6 +493,7 @@ function OfferChatPanel({
             currentDraft: draft,
             customFields: customFields,
             templateMode: !!templateHtml,
+            salaryRules,
           }),
         });
         const data = await res.json();
@@ -489,6 +545,7 @@ function OfferChatPanel({
           currentDraft: draft,
           customFields: customFields,
           templateMode: !!templateHtml,
+          salaryRules,
         }),
       });
       const data = await res.json();
@@ -531,6 +588,7 @@ function OfferChatPanel({
           currentDraft: draft,
           customFields: customFields,
           templateMode: !!templateHtml,
+          salaryRules,
         }),
       });
       const data = await res.json();
@@ -548,7 +606,7 @@ function OfferChatPanel({
     }
   };
 
-  // ── Send formal offer ──
+  // ── Send formal offer (actual logic, called after user confirms in modal) ──
   const handleSendOffer = async () => {
     if (!draft.baseCTC || !draft.joiningDate) return;
     onSetTyping(true);
@@ -651,10 +709,10 @@ function OfferChatPanel({
 
       if (!emailRes.ok) throw new Error("Email backend failed to send.");
 
-      // 6. Save the offer to BigQuery
+      // 6. Save the offer to BigQuery (now includes salaryRules)
       await fetch(OFFER_API, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'generate', jobId, candidateId: candId, draft, sendEmail: false }),
+        body: JSON.stringify({ action: 'generate', jobId, candidateId: candId, draft, sendEmail: false, salaryRules }),
       });
 
       onSetTyping(false);
@@ -694,24 +752,59 @@ function OfferChatPanel({
     return (
       <>
         <style>{bounceCss}</style>
+        {showGenerateChoiceModal && (
+          <GenerateChoiceModal
+            onContinue={() => { setShowGenerateChoiceModal(false); handleSendOffer(); }}
+            onFillSalary={() => { setShowGenerateChoiceModal(false); setShowSalaryModal(true); }}
+            onClose={() => setShowGenerateChoiceModal(false)}
+          />
+        )}
+        {showSalaryModal && (
+          <SalaryDetailsModal
+            rules={salaryRules}
+            onChange={setSalaryRules}
+            onClose={() => setShowSalaryModal(false)}
+          />
+        )}
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
           <div style={{ width: '50%', borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: '#fff', minWidth: 0 }}>
             <OfferForm draft={draft} onSetDraft={onSetDraft} filledCount={filledCount} totalFields={totalFields} onSubmitForm={handleFormSubmit} />
           </div>
           <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handleSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
-        </div>
-      </>
-    );
-  }
+      </div>
+    </>
+  );
+}
 
   return (
     <>
       <style>{bounceCss}</style>
+      {showGenerateChoiceModal && (
+        <GenerateChoiceModal
+          onContinue={() => { setShowGenerateChoiceModal(false); handleSendOffer(); }}
+          onFillSalary={() => { setShowGenerateChoiceModal(false); setShowSalaryModal(true); }}
+          onClose={() => setShowGenerateChoiceModal(false)}
+        />
+      )}
+      {showSalaryModal && (
+        <SalaryDetailsModal
+          rules={salaryRules}
+          onChange={setSalaryRules}
+          onClose={() => setShowSalaryModal(false)}
+        />
+      )}
       <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
       <div style={{ display: 'flex', width: '100%', height: '100%' }}>
         <div style={{ width: '32%', minWidth: 320, maxWidth: 420, flexShrink: 0, borderRight: `1px solid ${BORDER}`, background: '#fff', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '13px 18px', borderBottom: `1px solid ${BORDER}`, background: '#fff', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <button
+              onClick={onBack}
+              title="Back to pipeline"
+              style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 8, padding: 7, cursor: 'pointer', display: 'flex', alignItems: 'center', color: TEXT_DARK, flexShrink: 0 }}
+            >
+              <ArrowLeft size={14} />
+            </button>
             <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #F07C2D, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#fff', flexShrink: 0 }}>✦</div>
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: TEXT_DARK }}>Offer Copilot</div>
@@ -1008,13 +1101,12 @@ function OfferForm({ draft, onSetDraft, filledCount, totalFields, onSubmitForm }
 function PreviewPanel({ 
   draft, cand, jdTitle, safeBreakup, totalMonthly, totalAnnual, 
   firstName, todayStr, filledCount, totalFields, handleSendOffer, templateHtml,
-  signature, setSignature // 👈 Add them here
+  signature, setSignature, onOpenGenerateChoice
 }: {
   draft: OfferDraft; cand: any; jdTitle: string; safeBreakup: SalaryBreakup;
   totalMonthly: number; totalAnnual: number; firstName: string; todayStr: string;
   filledCount: number; totalFields: number; handleSendOffer: () => void;
   templateHtml?: string | null; 
-  // 👇 And add their TypeScript definitions here 👇
   signature: { url: string, x: number, y: number } | null;
   setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number } | null>>;
 }) {
@@ -1106,6 +1198,52 @@ function FormField({ label, value, onChange, placeholder }: { label: string; val
     <div>
       <label style={labelStyle}>{label}</label>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={inputStyle} />
+    </div>
+  );
+}
+
+export function GenerateChoiceModal({ onContinue, onFillSalary, onClose }: { onContinue: () => void; onFillSalary: () => void; onClose: () => void; }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 360 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, color: TEXT_DARK }}>Generate Offer</div>
+        <div style={{ fontSize: 13, color: TEXT_MID, marginBottom: 20 }}>Do you want to continue generating the offer, or set custom salary breakup rules first?</div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onFillSalary} style={{ padding: '8px 14px', borderRadius: 8, border: `1px solid ${BORDER}`, background: '#fff', fontSize: 13, cursor: 'pointer', color: TEXT_DARK }}>Fill Salary Details</button>
+          <button onClick={onContinue} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: ORANGE, color: '#fff', fontSize: 13, cursor: 'pointer' }}>Continue</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function SalaryDetailsModal({ rules, onChange, onClose }: { rules: SalaryRules; onChange: (r: SalaryRules) => void; onClose: () => void; }) {
+  const [local, setLocal] = useState<SalaryRules>(rules);
+  const field = (key: keyof SalaryRules, label: string) => (
+    <div key={key}>
+      <label style={labelStyle}>{label}</label>
+      <input type="number" value={local[key]} onChange={e => setLocal(p => ({ ...p, [key]: Number(e.target.value) }))} style={inputStyle} />
+    </div>
+  );
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 420, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, color: TEXT_DARK }}>Salary Breakup Rules</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {field('basicPercentOfCTC', 'Basic (% of CTC)')}
+          {field('hraPercentOfBasic', 'HRA (% of Basic)')}
+          {field('pfPercentOfBasic', 'PF (% of Basic)')}
+          {field('medicalAnnual', 'Medical (Annual ₹)')}
+          {field('conveyanceAnnual', 'Conveyance (Annual ₹)')}
+          {field('ltaAnnual', 'LTA (Annual ₹)')}
+          {field('bonusAnnual', 'Bonus (Annual ₹)')}
+          {field('offerValidityDays', 'Offer Validity (Days)')}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+          <button onClick={onClose} style={{ padding: '8px 14px', borderRadius: 8, border: `1px solid ${BORDER}`, background: '#fff', fontSize: 13, cursor: 'pointer', color: TEXT_DARK }}>Cancel</button>
+          <button onClick={() => { onChange(local); onClose(); }} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: ORANGE, color: '#fff', fontSize: 13, cursor: 'pointer' }}>Save & Close</button>
+        </div>
+      </div>
     </div>
   );
 }
