@@ -121,56 +121,38 @@ def save_offer_to_db(
     salary_rules_json: str = "",
     status: str = "sent"
 ) -> str:
-    """Save (or overwrite) the offer for this job+candidate, including full salary breakup."""
+    """Save (or overwrite) the offer for this job+candidate, including full salary breakup as JSON."""
     try:
         table = f"{project_id}.{dataset_id}.offer_letters"
         breakup = breakup or {}
 
-        def _row(key: str) -> dict:
-            return breakup.get(key, {}) or {}
-
         now = datetime.now(timezone.utc).isoformat()
 
         row = {
-            "job_id":                    job_id,
-            "candidate_id":               candidate_id,
-            "candidate_name":             candidate_name,
-            "candidate_email":            candidate_email,
-            "designation":                designation,
-            "base_ctc":                   base_ctc,
-            "variable_pay":               variable_pay,
-            "joining_date":               joining_date or None,
-            "work_location":              work_location,
-            "probation":                  probation,
-            "reporting_manager":          reporting_manager,
-            "offer_html":                 offer_html,
-            "basic_monthly":              _row("basic").get("monthly"),
-            "basic_annual":               _row("basic").get("annual"),
-            "hra_monthly":                _row("hra").get("monthly"),
-            "hra_annual":                 _row("hra").get("annual"),
-            "pf_monthly":                 _row("pf").get("monthly"),
-            "pf_annual":                  _row("pf").get("annual"),
-            "medical_monthly":            _row("medical").get("monthly"),
-            "medical_annual":             _row("medical").get("annual"),
-            "conveyance_monthly":         _row("conveyance").get("monthly"),
-            "conveyance_annual":          _row("conveyance").get("annual"),
-            "lta_monthly":                _row("lta").get("monthly"),
-            "lta_annual":                 _row("lta").get("annual"),
-            "bonus_monthly":              _row("bonus").get("monthly"),
-            "bonus_annual":               _row("bonus").get("annual"),
-            "special_allowance_monthly":  _row("specialAllowance").get("monthly"),
-            "special_allowance_annual":   _row("specialAllowance").get("annual"),
-            "salary_rules":               salary_rules_json or None,
-            "status":                     status,
-            "created_at":                 now,
-            "updated_at":                 now,
+            "job_id":            job_id,
+            "candidate_id":      candidate_id,
+            "candidate_name":    candidate_name,
+            "candidate_email":   candidate_email,
+            "designation":       designation,
+            "base_ctc":          base_ctc,
+            "variable_pay":      variable_pay,
+            "joining_date":      joining_date or None,
+            "work_location":     work_location,
+            "probation":         probation,
+            "reporting_manager": reporting_manager,
+            "offer_html":        offer_html,
+            "salary_breakup":    json.dumps(breakup) if breakup else None,
+            "salary_rules":      salary_rules_json or None,
+            "status":            status,
+            "created_at":        now,
+            "updated_at":        now,
         }
 
         # ── Use MERGE (upsert) keyed on job_id + candidate_id ──
         # This ensures regenerating an offer for the SAME candidate always
         # overwrites their single existing row instead of creating duplicates
         # or silently failing to update (which was the old delete+insert bug).
-        set_clauses = ", ".join(f"T.{k} = @{k}" for k in row.keys() if k not in ("job_id", "candidate_id", "created_at"))
+        set_clauses = ", ".join(f"T.{k} = @{k}" for k in row.keys() if k not in ("job_id", "candidate_id", "created_at", "updated_at"))
         insert_cols = ", ".join(row.keys())
         insert_vals = ", ".join(f"@{k}" for k in row.keys())
 
@@ -362,10 +344,15 @@ YOUR ROLE:
     )
 
 
-def _build_generate_agent(cand_ctx: dict, job_ctx: dict, draft: dict, send_email: bool, offer_validity_days: int = 7) -> LlmAgent:
+def _build_generate_agent(cand_ctx: dict, job_ctx: dict, draft: dict, send_email: bool, offer_validity_days: int = 7, salary_rules: dict = None) -> LlmAgent:
+    salary_rules = {**DEFAULT_SALARY_RULES, **(salary_rules or {})}
     designation          = draft.get('designation', job_ctx.get('title', ''))
     deadline = (datetime.now(timezone.utc) + timedelta(days=offer_validity_days)).strftime('%-d %B %Y')
-    offer_email_template = OFFER_EMAIL_TEMPLATE.replace('{support_footer}', SUPPORT_FOOTER)
+    offer_email_template = (
+    OFFER_EMAIL_TEMPLATE
+    .replace('{support_footer}', SUPPORT_FOOTER)
+    .replace('{offer_body}', 'OFFER_BODY_PLACEHOLDER')
+)
 
     return LlmAgent(
         name="offer_generate_agent",
@@ -381,6 +368,7 @@ DESIGNATION: {designation}
 OFFER DETAILS: {json.dumps(draft, indent=2)}
 SEND EMAIL: {send_email}
 ACCEPTANCE DEADLINE: {deadline}
+SALARY RULES USED: {json.dumps(salary_rules, indent=2)}
 
 OFFER LETTER WRITING RULES:
 - Write ONLY the inner HTML body (no <html>/<head>/<body> tags).
@@ -393,7 +381,7 @@ OFFER LETTER WRITING RULES:
 AFTER writing the offer body HTML, wrap it in this outer email template and call send_email_tool:
 {offer_email_template}
 
-Replace {{offer_body}} with the offer HTML you wrote.
+Replace OFFER_BODY_PLACEHOLDER with the offer HTML you wrote.
 
 TOOL CALL ORDER:
 1. save_offer_to_db — pass all offer fields + the full wrapped HTML as offer_html + the full breakup dictionary (from OFFER DETAILS above, under the "breakup" key) + salary_rules_json (a JSON string of the SALARY RULES USED shown above)
@@ -666,7 +654,7 @@ def _handle_generate(body: dict, headers: dict):
         job_ctx  = f_j.result()
 
     session_id = f"generate_{job_id}_{candidate_id}"
-    agent      = _build_generate_agent(cand_ctx, job_ctx, draft, send_email, offer_validity_days)
+    agent      = _build_generate_agent(cand_ctx, job_ctx, draft, send_email, offer_validity_days, salary_rules)
     prompt     = (
         f"Generate and save the offer letter for {cand_ctx.get('name', 'Candidate')}.\n"
         f"JOB ID: {job_id}\nCANDIDATE ID: {candidate_id}\nDRAFT: {json.dumps(draft)}"
@@ -714,19 +702,11 @@ def _handle_get_offers(body: dict, headers: dict):
     rows = list(bq_client.query(
         f"SELECT candidate_id, candidate_name, designation, base_ctc, variable_pay, "
         f"joining_date, work_location, probation, reporting_manager, status, created_at, "
-        f"basic_monthly, basic_annual, hra_monthly, hra_annual, pf_monthly, pf_annual, "
-        f"medical_monthly, medical_annual, conveyance_monthly, conveyance_annual, "
-        f"lta_monthly, lta_annual, bonus_monthly, bonus_annual, "
-        f"special_allowance_monthly, special_allowance_annual, salary_rules "
+        f"salary_breakup, salary_rules "
         f"FROM `{project_id}.{dataset_id}.offer_letters` "
         f"WHERE job_id = '{job_id}' AND status != 'cancelled' "
         f"ORDER BY created_at DESC"
     ))
-
-    def _breakup_row(r, prefix):
-        m = getattr(r, f"{prefix}_monthly", None)
-        a = getattr(r, f"{prefix}_annual", None)
-        return {"monthly": m or "", "annual": a or ""}
 
     offers = [
         {
@@ -743,16 +723,7 @@ def _handle_get_offers(body: dict, headers: dict):
                 "location":         r.work_location     or "",
                 "probation":        r.probation         or "",
                 "reportingManager": r.reporting_manager or "",
-                "breakup": {
-                    "basic":            _breakup_row(r, "basic"),
-                    "hra":              _breakup_row(r, "hra"),
-                    "pf":               _breakup_row(r, "pf"),
-                    "medical":          _breakup_row(r, "medical"),
-                    "conveyance":       _breakup_row(r, "conveyance"),
-                    "lta":              _breakup_row(r, "lta"),
-                    "bonus":            _breakup_row(r, "bonus"),
-                    "specialAllowance": _breakup_row(r, "special_allowance"),
-                },
+                "breakup": json.loads(r.salary_breakup) if getattr(r, 'salary_breakup', None) else {},
             },
         }
         for r in rows
