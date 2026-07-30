@@ -630,6 +630,10 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
   const openAddModal = () => { setEditingInv(null); setShowModal(true); };
   const openEditModal = (inv: any) => { setEditingInv(inv); setShowModal(true); };
 
+  const [showReferModal, setShowReferModal] = useState(false);
+
+ 
+
   // ── InterviewerModal ───────────────────────────────────────────────
   const InterviewerModal = () => {
     const [name, setName] = useState(editingInv?.name || '');
@@ -769,15 +773,225 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     );
   };
 
+  // ── ReferFriendModal ───────────────────────────────────────────────
+  const ReferFriendModal = () => {
+    const [resumeFile, setResumeFile] = useState<File | null>(null);
+    const [dragOver, setDragOver] = useState(false);
+    const [firstName, setFirstName] = useState('');
+    const [middleName, setMiddleName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [phoneCode, setPhoneCode] = useState('+91');
+    const [phone, setPhone] = useState('');
+    const [email, setEmail] = useState('');
+    const [gender, setGender] = useState('');
+    const [expYears, setExpYears] = useState('');
+    const [expMonths, setExpMonths] = useState('');
+    const [salaryCurrency, setSalaryCurrency] = useState('INR');
+    const [salaryAmount, setSalaryAmount] = useState('');
+    const [salaryFreq, setSalaryFreq] = useState('NA');
+    const [fitReason, setFitReason] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const referFileRef = useRef<HTMLInputElement | null>(null);
+
+    const inputStyle: React.CSSProperties = {
+      width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #E5E7EB',
+      fontSize: '13px', outline: 'none', boxSizing: 'border-box', fontFamily: FONT, color: T.text,
+    };
+    const labelStyle: React.CSSProperties = {
+      fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px', display: 'block', fontFamily: FONT,
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const f = e.dataTransfer.files?.[0];
+      if (f) setResumeFile(f);
+    };
+
+    const handleSubmit = async () => {
+      setIsSubmitting(true);
+      try {
+        // TODO: wire to actual referral endpoint once available
+        showToast(`Referral submitted for ${firstName} ${lastName}!`, 'success');
+        setShowReferModal(false);
+      } catch (err) {
+        showToast('Failed to submit referral.', 'error');
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
+    return (
+      <div
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+        onClick={e => e.target === e.currentTarget && setShowReferModal(false)}
+      >
+        <div style={{ background: T.white, borderRadius: '14px', width: '100%', maxWidth: '540px', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 48px rgba(0,0,0,0.14)', fontFamily: FONT }}>
+          {/* Header */}
+          <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: T.text, fontFamily: FONT }}>Refer a friend</h3>
+            <button onClick={() => setShowReferModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.gray400, display: 'flex', alignItems: 'center', padding: '2px' }}><X size={18} /></button>
+          </div>
+
+          <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', overflowY: 'auto', flex: 1 }}>
+            {/* Job Position */}
+            <div>
+              <label style={labelStyle}>Job Position</label>
+              <select value={job.job_id} disabled style={{ ...inputStyle, background: '#F9FAFB', cursor: 'not-allowed', appearance: 'auto' }}>
+                <option value={job.job_id}>{job.title}</option>
+              </select>
+            </div>
+
+            {/* Resume dropzone */}
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              style={{
+                border: `2px dashed ${dragOver ? T.orange : '#93E5D0'}`,
+                background: dragOver ? T.orangeLight : '#E6FBF6',
+                borderRadius: '8px', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s',
+              }}
+              onClick={() => referFileRef.current?.click()}
+            >
+              <input type="file" ref={referFileRef} style={{ display: 'none' }} onChange={e => setResumeFile(e.target.files?.[0] ?? null)} />
+              <div style={{ fontSize: '13px', color: '#374151', fontFamily: FONT }}>
+                {resumeFile ? (
+                  <span style={{ fontWeight: 600 }}>{resumeFile.name}</span>
+                ) : (
+                  <>Drag and drop resume here or <span style={{ color: '#5B5FCF', fontWeight: 600 }}>📎 select from computer.</span></>
+                )}
+              </div>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', fontFamily: FONT }}>You can upload file upto 10MB</div>
+            </div>
+
+            {/* Name row 1 */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <div>
+                <label style={labelStyle}>First Name</label>
+                <input value={firstName} onChange={e => setFirstName(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Middle Name</label>
+                <input value={middleName} onChange={e => setMiddleName(e.target.value)} style={inputStyle} />
+              </div>
+            </div>
+
+            {/* Name row 2 */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <div>
+                <label style={labelStyle}>Last Name</label>
+                <input value={lastName} onChange={e => setLastName(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Mobile Phone</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <select value={phoneCode} onChange={e => setPhoneCode(e.target.value)} style={{ ...inputStyle, width: '72px', flexShrink: 0, background: '#F9FAFB', appearance: 'auto' }}>
+                    <option value="+91">+91</option>
+                    <option value="+1">+1</option>
+                    <option value="+44">+44</option>
+                  </select>
+                  <input value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+            </div>
+
+            {/* Email */}
+            <div>
+              <label style={labelStyle}>Email</label>
+              <input value={email} onChange={e => setEmail(e.target.value)} type="email" style={inputStyle} />
+            </div>
+
+            {/* Gender */}
+            <div>
+              <label style={labelStyle}>Gender</label>
+              <select value={gender} onChange={e => setGender(e.target.value)} style={{ ...inputStyle, appearance: 'auto' }}>
+                <option value="">Select an option</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
+                <option value="prefer_not_to_say">Prefer not to say</option>
+              </select>
+            </div>
+
+            {/* Experience */}
+            <div>
+              <label style={labelStyle}>Experience</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                <div style={{ display: 'flex' }}>
+                  <input value={expYears} onChange={e => setExpYears(e.target.value)} placeholder="Ex: 3" style={{ ...inputStyle, borderRadius: '8px 0 0 8px', borderRight: 'none' }} />
+                  <span style={{ padding: '10px 14px', background: '#F3F4F6', border: '1px solid #E5E7EB', borderRadius: '0 8px 8px 0', fontSize: '13px', color: '#374151', fontFamily: FONT, whiteSpace: 'nowrap' }}>Years</span>
+                </div>
+                <div style={{ display: 'flex' }}>
+                  <input value={expMonths} onChange={e => setExpMonths(e.target.value)} style={{ ...inputStyle, borderRadius: '8px 0 0 8px', borderRight: 'none' }} />
+                  <span style={{ padding: '10px 14px', background: '#F3F4F6', border: '1px solid #E5E7EB', borderRadius: '0 8px 8px 0', fontSize: '13px', color: '#374151', fontFamily: FONT, whiteSpace: 'nowrap' }}>Months</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Current Salary */}
+            <div>
+              <label style={labelStyle}>Current Salary</label>
+              <div style={{ display: 'flex' }}>
+                <select value={salaryCurrency} onChange={e => setSalaryCurrency(e.target.value)} style={{ ...inputStyle, width: '80px', flexShrink: 0, borderRadius: '8px 0 0 8px', borderRight: 'none', background: '#F9FAFB', appearance: 'auto' }}>
+                  <option value="INR">INR</option>
+                  <option value="USD">USD</option>
+                </select>
+                <input value={salaryAmount} onChange={e => setSalaryAmount(e.target.value)} style={{ ...inputStyle, borderRadius: 0 }} />
+                <select value={salaryFreq} onChange={e => setSalaryFreq(e.target.value)} style={{ ...inputStyle, width: '80px', flexShrink: 0, borderRadius: '0 8px 8px 0', borderLeft: 'none', background: '#F9FAFB', appearance: 'auto' }}>
+                  <option value="NA">NA</option>
+                  <option value="Monthly">Monthly</option>
+                  <option value="Annual">Annual</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Fit reason */}
+            <div>
+              <label style={labelStyle}>Why do you think this person would be a good fit for this position and for the organization?</label>
+              <textarea
+                value={fitReason}
+                onChange={e => setFitReason(e.target.value)}
+                placeholder="Type something here"
+                rows={3}
+                style={{ ...inputStyle, resize: 'vertical' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ padding: '14px 20px', borderTop: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'flex-end', gap: '8px', background: T.gray50, flexShrink: 0 }}>
+            <button onClick={() => setShowReferModal(false)} style={{ padding: '8px 16px', borderRadius: '7px', fontSize: '13px', fontWeight: 500, background: T.white, border: `1px solid ${T.gray200}`, cursor: 'pointer', color: T.textSub, fontFamily: FONT }}>Cancel</button>
+            <button
+              onClick={handleSubmit}
+              disabled={!firstName || !lastName || !email || isSubmitting}
+              style={{ padding: '8px 20px', borderRadius: '7px', fontSize: '13px', fontWeight: 600, background: '#5B5FCF', color: T.white, border: 'none', cursor: (!firstName || !lastName || !email || isSubmitting) ? 'not-allowed' : 'pointer', opacity: (!firstName || !lastName || !email || isSubmitting) ? 0.6 : 1, fontFamily: FONT }}
+            >
+              {isSubmitting ? 'Submitting…' : 'Refer'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ borderBottom: `0.5px solid ${T.gray100}` }}>
       {showModal && <InterviewerModal />}
+      {showReferModal && <ReferFriendModal />}
 
       <div onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: '11px', padding: '13px 18px', cursor: 'pointer', transition: 'background 0.12s' }} onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = T.gray50} onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
         <div style={{ color: T.gray400, display: 'flex', alignItems: 'center' }}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
         <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: ic.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Briefcase size={14} style={{ color: ic.color }} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: T.text, fontFamily: FONT, marginBottom: '2px' }}>{job.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '2px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: T.text, fontFamily: FONT }}>{job.title}</div>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowReferModal(true); }}
+              style={{ padding: '4px 11px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: '0.5px solid #C7D2FE', borderRadius: '6px', color: '#5B5FCF', cursor: 'pointer', transition: 'background .12s', flexShrink: 0 }}
+            >
+              Refer a friend
+            </button>
+          </div>
           <div style={{ fontSize: '11px', color: T.gray600, fontFamily: FONT, display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' }}>
             {job.location && `${job.location} · `}{job.experience_min}–{job.experience_max} yrs ·{' '}
             {job.must_have_skills.slice(0, 3).map((s) => <span key={s} style={{ padding: '1px 7px', borderRadius: '20px', fontSize: '10px', fontWeight: 500, background: T.orangeLight, color: '#9A3412', margin: '0 2px' }}>{s}</span>)}
