@@ -5,7 +5,11 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+from google.cloud import storage
 import functions_framework
+
+GCS_BUCKET_NAME = 'hr-data-source-at'
+GCS_FOLDER = 'offer_letter'
 
 @functions_framework.http
 def send_email(request):
@@ -53,6 +57,18 @@ def send_email(request):
             if encoding == 'base64':
                 file_bytes = base64.b64decode(content)
                 part = MIMEApplication(file_bytes, Name=filename)
+
+                # Upload the offer letter PDF to GCS
+                if filename.lower().endswith('.pdf'):
+                    try:
+                        storage_client = storage.Client()
+                        bucket = storage_client.bucket(GCS_BUCKET_NAME)
+                        blob_path = f'{GCS_FOLDER}/{filename}'
+                        blob = bucket.blob(blob_path)
+                        blob.upload_from_string(file_bytes, content_type='application/pdf')
+                        print(f"Uploaded {filename} to gs://{GCS_BUCKET_NAME}/{blob_path}")
+                    except Exception as gcs_err:
+                        print(f"GCS upload failed for {filename}: {gcs_err}")
             else:
                 part = MIMEApplication(content.encode('utf-8'), Name=filename)
 
