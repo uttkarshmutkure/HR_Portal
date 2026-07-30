@@ -770,16 +770,27 @@ function OfferChatPanel({
 
       if (!emailRes.ok) throw new Error('Email backend failed to send.');
 
-      await fetch(OFFER_API, {
+      // 6. Save the offer to BigQuery (now includes salaryRules)
+      // 6. Save the offer to BigQuery (now includes salaryRules)
+      const saveRes = await fetch(OFFER_API, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'generate', jobId, candidateId: candId, draft, sendEmail: false, salaryRules }),
       });
 
+      if (!saveRes.ok) {
+        const errBody = await saveRes.text().catch(() => '');
+        throw new Error(`Failed to save offer to database: ${saveRes.status} ${errBody}`);
+      }
+
+      const saveData = await saveRes.json();
+      if (!saveData.savedToDB) {
+        throw new Error('Offer agent ran but did not confirm the save.');
+      }
+
       onSetTyping(false);
       showToast?.(`Offer sent to ${cand.name}!`, 'success');
       onAddBotMsg(`✅ Offer letter has been sent to **${cand.name}** with the PDF attached.`);
-
-    } catch (err) {
+          } catch (err) {
       onSetTyping(false);
       onAddBotMsg('Failed to send the offer. Please check your connection and try again.');
       console.error(err);
