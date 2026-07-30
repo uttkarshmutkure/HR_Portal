@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useLocation, Link } from 'react-router';
-import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2 } from 'lucide-react';
+import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2, Search } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { EmailService } from '../../services/emailService';
 import { listJobs } from '../../services/screening';
@@ -239,6 +239,7 @@ export default function ShortlistedPage() {
   const [loading,      setLoading     ] = useState(true);
   const [scheduleCand, setScheduleCand] = useState<any | null>(null);
   const [refreshKey,   setRefreshKey  ] = useState(0);
+  const [searchQuery,  setSearchQuery ] = useState('');
 
   // Load job title
   useEffect(() => {
@@ -273,6 +274,12 @@ export default function ShortlistedPage() {
       .catch(err => { console.error(err); showToast('Failed to load data', 'error'); })
       .finally(() => setLoading(false));
   }, [jobId, refreshKey]);
+
+  const filteredCandidates = candidates.filter(c => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return c.name.toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q);
+  });
 
   if (!jobId) return <div>Job not found</div>;
 
@@ -310,9 +317,32 @@ export default function ShortlistedPage() {
         </div>
 
         <div style={{ background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', overflow: 'hidden' }}>
-          <div style={{ padding: '13px 16px', borderBottom: '0.5px solid #F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '13px', fontWeight: 500, color: '#111827', fontFamily: FONT }}>Candidates — sorted by AI score</span>
-            <span style={{ fontSize: '10px', color: '#6B7280', fontFamily: FONT }}>{candidates.length} total</span>
+          <div style={{ padding: '13px 16px', borderBottom: '0.5px solid #F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 500, color: '#111827', fontFamily: FONT, flexShrink: 0 }}>Candidates — sorted by AI score</span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ position: 'relative', width: '200px' }}>
+                <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
+                <input
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search candidates…"
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '6px 10px 6px 30px',
+                    fontSize: '12px',
+                    fontFamily: FONT,
+                    borderRadius: '6px',
+                    border: '0.5px solid #E5E7EB',
+                    outline: 'none',
+                    color: '#111827',
+                    background: '#fff',
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: '10px', color: '#6B7280', fontFamily: FONT, flexShrink: 0 }}>{filteredCandidates.length} total</span>
+            </div>
           </div>
 
           {loading && (
@@ -321,20 +351,26 @@ export default function ShortlistedPage() {
             </div>
           )}
 
-          {!loading && candidates.length === 0 && (
+          {!loading && filteredCandidates.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '48px 20px', textAlign: 'center' }}>
               <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#F9FAFB', border: '0.5px solid #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
                 <Users size={20} style={{ color: '#9CA3AF' }} />
               </div>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#374151', fontFamily: FONT, marginBottom: '4px' }}>No shortlisted candidates yet</div>
-              <div style={{ fontSize: '11px', color: '#9CA3AF', fontFamily: FONT, marginBottom: '16px' }}>Go back to results and shortlist candidates to see them here.</div>
-              <Link to={`/jobs/${jobId}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '7px', background: '#1D194B', color: '#fff', fontSize: '12px', fontWeight: 500, fontFamily: FONT, textDecoration: 'none' }}>
-                <ArrowLeft size={13} /> Back to Results
-              </Link>
+              {candidates.length === 0 ? (
+                <>
+                  <div style={{ fontSize: '13px', fontWeight: 500, color: '#374151', fontFamily: FONT, marginBottom: '4px' }}>No shortlisted candidates yet</div>
+                  <div style={{ fontSize: '11px', color: '#9CA3AF', fontFamily: FONT, marginBottom: '16px' }}>Go back to results and shortlist candidates to see them here.</div>
+                  <Link to={`/jobs/${jobId}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '7px', background: '#1D194B', color: '#fff', fontSize: '12px', fontWeight: 500, fontFamily: FONT, textDecoration: 'none' }}>
+                    <ArrowLeft size={13} /> Back to Results
+                  </Link>
+                </>
+              ) : (
+                <div style={{ fontSize: '13px', fontWeight: 500, color: '#374151', fontFamily: FONT }}>No candidates match your search.</div>
+              )}
             </div>
           )}
 
-          {!loading && candidates.map((candidate, index) => (
+          {!loading && filteredCandidates.map((candidate, index) => (
             <CandidateRow
               key={candidate.candidate_id}
               candidate={candidate}

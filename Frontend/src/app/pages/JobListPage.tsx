@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router';
 import {
   Briefcase, Loader2, AlertCircle, RefreshCw, Plus,
   ChevronDown, ChevronUp, X, Calendar,
-  Edit2, Trash2, Play, Trash, CheckCircle, Clock, Upload 
+  Edit2, Trash2, Play, Trash, CheckCircle, Clock, Upload, Search
 } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
@@ -888,6 +888,7 @@ export default function JobListPage() {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadJobs = async () => {
     try {
@@ -900,6 +901,16 @@ export default function JobListPage() {
   };
 
   useEffect(() => { loadJobs(); }, []);
+
+  const filteredJobs = jobs.filter(job => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      job.title.toLowerCase().includes(q) ||
+      (job.location || '').toLowerCase().includes(q) ||
+      job.must_have_skills.some(s => s.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <DashboardLayout breadcrumb="Dashboard / All Jobs">
@@ -923,11 +934,36 @@ export default function JobListPage() {
 
         {/* Jobs card */}
         <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px' }}>
-          <div style={{ padding: '11px 18px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '10px 10px 0 0' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: FONT }}>Job listings</span>
-            {!loadingJobs && !fetchError && (
-              <span style={{ fontSize: '11px', color: T.gray400, fontFamily: FONT }}>{jobs.length} position{jobs.length !== 1 ? 's' : ''}</span>
-            )}
+          <div style={{ padding: '11px 18px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '10px 10px 0 0', gap: '12px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: FONT, flexShrink: 0 }}>Job listings</span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ position: 'relative', width: '220px' }}>
+                <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: T.gray400, pointerEvents: 'none' }} />
+                <input
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search jobs…"
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '6px 10px 6px 30px',
+                    fontSize: '12px',
+                    fontFamily: FONT,
+                    borderRadius: '6px',
+                    border: `0.5px solid ${T.gray200}`,
+                    outline: 'none',
+                    color: T.text,
+                    background: T.white,
+                  }}
+                />
+              </div>
+              {!loadingJobs && !fetchError && (
+                <span style={{ fontSize: '11px', color: T.gray400, fontFamily: FONT, flexShrink: 0 }}>
+                  {filteredJobs.length} position{filteredJobs.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
           </div>
 
           {loadingJobs && (
@@ -940,11 +976,13 @@ export default function JobListPage() {
               <AlertCircle size={15} /> {fetchError}
             </div>
           )}
-          {!loadingJobs && !fetchError && jobs.map(job => <JobRow key={job.job_id} job={job} autoExpand={expandJobId === job.job_id} />)}
-          {!loadingJobs && !fetchError && jobs.length === 0 && (
+          {!loadingJobs && !fetchError && filteredJobs.map(job => <JobRow key={job.job_id} job={job} autoExpand={expandJobId === job.job_id} />)}
+          {!loadingJobs && !fetchError && filteredJobs.length === 0 && (
             <div style={{ padding: '56px 0', textAlign: 'center', fontFamily: FONT }}>
               <Briefcase size={24} color={T.gray200} style={{ margin: '0 auto 8px', display: 'block' }} />
-              <div style={{ fontSize: '12px', color: T.gray400 }}>No jobs found.</div>
+              <div style={{ fontSize: '12px', color: T.gray400 }}>
+                {searchQuery ? 'No jobs match your search.' : 'No jobs found.'}
+              </div>
             </div>
           )}
         </div>

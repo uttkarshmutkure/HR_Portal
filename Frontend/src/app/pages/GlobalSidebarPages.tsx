@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router';
-import { ArrowRight, Users, GitMerge, Clock, MessageSquare, Loader2, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Users, GitMerge, Clock, MessageSquare, Loader2, Check, X, ChevronDown, ChevronUp, Search } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
 
@@ -217,7 +217,7 @@ function RatingDots({ rating }: { rating: number }) {
 }
 
 // ── Single expandable feedback card ───────────────────────────────────────────
-function FeedbackCard({ item, defaultExpanded = false }: { item: FeedbackItem; defaultExpanded?: boolean }) {
+function FeedbackCard({ item, defaultExpanded = false, showJobTitle = true }: { item: FeedbackItem; defaultExpanded?: boolean; showJobTitle?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const av = getAvColor(item.candidate.name);
   const isAdvance = item.verdict === 'advance';
@@ -259,9 +259,11 @@ function FeedbackCard({ item, defaultExpanded = false }: { item: FeedbackItem; d
             </span>
           </div>
           <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
-            {item.job.title}
-            {item.interviewer_name && ` · By ${item.interviewer_name}`}
-            {item.submitted_at && ` · ${new Date(item.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+            {showJobTitle && item.job.title}
+            {showJobTitle && item.interviewer_name && ` · By ${item.interviewer_name}`}
+            {showJobTitle && !item.interviewer_name && item.submitted_at && ''}
+            {!showJobTitle && item.interviewer_name && `By ${item.interviewer_name}`}
+            {item.submitted_at && `${(showJobTitle || item.interviewer_name) ? ' · ' : ''}${new Date(item.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`}
           </div>
         </div>
 
@@ -334,11 +336,115 @@ function StatPill({ value, label, color }: { value: number | string; label: stri
   );
 }
 
-// ── 4. Global Feedback Inbox ───────────────────────────────────────────────────
+// ── Reusable filter dropdown ───────────────────────────────────────────────────
+function FilterDropdown<T extends string>({ value, onChange, options }: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { key: T; label: string }[];
+}) {
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value as T)}
+        style={{
+          appearance: 'none',
+          WebkitAppearance: 'none',
+          padding: '6px 30px 6px 12px',
+          borderRadius: '6px',
+          border: '0.5px solid #E5E7EB',
+          fontSize: '12px',
+          fontWeight: 500,
+          fontFamily: FONT,
+          background: '#fff',
+          color: '#111827',
+          outline: 'none',
+          cursor: 'pointer',
+          minWidth: '120px',
+        }}
+      >
+        {options.map(opt => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
+      </select>
+      <ChevronDown size={12} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
+    </div>
+  );
+}
+
+// ── Reusable search input ──────────────────────────────────────────────────────
+function SearchBox({ value, onChange, placeholder, width = '260px' }: { value: string; onChange: (v: string) => void; placeholder: string; width?: string }) {
+  return (
+    <div style={{ position: 'relative', width }}>
+      <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '7px 10px 7px 30px',
+          fontSize: '12px',
+          fontFamily: FONT,
+          borderRadius: '7px',
+          border: '0.5px solid #E5E7EB',
+          outline: 'none',
+          color: '#111827',
+          background: '#fff',
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Per-job feedback summary card (for the job picker view) ──────────────────
+function JobFeedbackCard({ job, items, onClick }: { job: JobSummary; items: FeedbackItem[]; onClick: () => void }) {
+  const advanced  = items.filter(f => f.verdict === 'advance').length;
+  const rejected  = items.filter(f => f.verdict !== 'advance').length;
+  const ratedItems = items.filter(f => f.rating != null);
+  const avgRating = ratedItems.length > 0
+    ? (ratedItems.reduce((s, f) => s + (f.rating ?? 0), 0) / ratedItems.length).toFixed(1)
+    : '—';
+
+  return (
+    <div
+      onClick={onClick}
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '12px', cursor: 'pointer', transition: 'all 0.2s' }}
+      onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = '#F07C2D'}
+      onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = '#E5E7EB'}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+        <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <MessageSquare size={18} color="#F07C2D" />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{job.title}</div>
+          <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>
+            {items.length} submission{items.length !== 1 ? 's' : ''} · {advanced} advanced · {rejected} rejected
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '16px', fontWeight: 700, color: '#F07C2D' }}>{avgRating}</div>
+          <div style={{ fontSize: '10px', color: '#6B7280', textTransform: 'uppercase' }}>Avg Rating</div>
+        </div>
+        <ArrowRight size={16} color="#9CA3AF" />
+      </div>
+    </div>
+  );
+}
+
+// ── 4. Global Feedback Inbox (job-first hierarchy) ────────────────────────────
 export function GlobalFeedbackPage() {
   const [allFeedback, setAllFeedback] = useState<FeedbackItem[]>([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState<string | null>(null);
+
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+
+  const [jobSearch, setJobSearch]     = useState('');
+  const [candSearch, setCandSearch]   = useState('');
+
   const [filter, setFilter]           = useState<'all' | 'advanced' | 'rejected'>('all');
   const [roundFilter, setRoundFilter] = useState<'all' | 'round1' | 'technical' | 'hr'>('all');
 
@@ -420,47 +526,83 @@ export function GlobalFeedbackPage() {
     fetchAllFeedback();
   }, []);
 
-  const advanced  = allFeedback.filter(f => f.verdict === 'advance').length;
-  const rejected  = allFeedback.filter(f => f.verdict === 'reject').length;
-  const avgRating = allFeedback.filter(f => f.rating != null).length > 0
-    ? (allFeedback.reduce((s, f) => s + (f.rating ?? 0), 0) / allFeedback.filter(f => f.rating != null).length).toFixed(1)
-    : '—';
+  // Group feedback by job for the job-picker view
+  const jobGroups = useMemo(() => {
+    const map = new Map<string, { job: JobSummary; items: FeedbackItem[] }>();
+    allFeedback.forEach(item => {
+      const key = item.job.job_id;
+      if (!map.has(key)) map.set(key, { job: item.job, items: [] });
+      map.get(key)!.items.push(item);
+    });
+    return Array.from(map.values());
+  }, [allFeedback]);
 
-  const filtered = allFeedback
-    .filter(f => filter === 'all' ? true : filter === 'advanced' ? f.verdict === 'advance' : f.verdict !== 'advance')
-    .filter(f => roundFilter === 'all' ? true : f.round === roundFilter);
+  const filteredJobGroups = jobGroups.filter(g => {
+    const q = jobSearch.trim().toLowerCase();
+    if (!q) return true;
+    return g.job.title.toLowerCase().includes(q) || (g.job.location || '').toLowerCase().includes(q);
+  });
 
-  return (
-    <DashboardLayout breadcrumb="Dashboard / Feedback Inbox">
-      <div style={{ padding: '20px 24px', fontFamily: FONT, maxWidth: '880px' }}>
+  const selectedGroup = jobGroups.find(g => g.job.job_id === selectedJobId) || null;
 
-        {/* ── Page header ── */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>Feedback Inbox</div>
-          <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
-            Interviewer feedback across all active jobs
-            {!loading && allFeedback.length > 0 && ` · ${allFeedback.length} submission${allFeedback.length !== 1 ? 's' : ''}`}
+  // Feedback scoped to the selected job, further filtered by verdict/round/candidate search
+  const jobScopedFiltered = useMemo(() => {
+    if (!selectedGroup) return [];
+    const q = candSearch.trim().toLowerCase();
+    return selectedGroup.items
+      .filter(f => filter === 'all' ? true : filter === 'advanced' ? f.verdict === 'advance' : f.verdict !== 'advance')
+      .filter(f => roundFilter === 'all' ? true : f.round === roundFilter)
+      .filter(f => !q || f.candidate.name.toLowerCase().includes(q) || (f.candidate.email || '').toLowerCase().includes(q));
+  }, [selectedGroup, filter, roundFilter, candSearch]);
+
+  const backToJobs = () => {
+    setSelectedJobId(null);
+    setCandSearch('');
+    setFilter('all');
+    setRoundFilter('all');
+  };
+
+  // ── Loading / error / empty states (shared across both views) ──────────────
+  if (loading) {
+    return (
+      <DashboardLayout breadcrumb="Dashboard / Feedback Inbox">
+        <div style={{ padding: '20px 24px', fontFamily: FONT, width: '100%', boxSizing: 'border-box' }}>
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>Feedback Inbox</div>
           </div>
-        </div>
-
-        {/* ── Loading ── */}
-        {loading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B7280', fontSize: '13px', padding: '48px 0', justifyContent: 'center' }}>
             <Loader2 size={16} style={{ color: '#F07C2D', animation: 'spin 1s linear infinite' }} />
             Loading feedback…
             <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
           </div>
-        )}
+        </div>
+      </DashboardLayout>
+    );
+  }
 
-        {/* ── Error ── */}
-        {error && !loading && (
+  if (error) {
+    return (
+      <DashboardLayout breadcrumb="Dashboard / Feedback Inbox">
+        <div style={{ padding: '20px 24px', fontFamily: FONT, width: '100%', boxSizing: 'border-box' }}>
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>Feedback Inbox</div>
+          </div>
           <div style={{ background: '#FEF2F2', border: '0.5px solid #FCA5A5', borderRadius: '10px', padding: '14px 18px', fontSize: '13px', color: '#DC2626' }}>
             {error}
           </div>
-        )}
+        </div>
+      </DashboardLayout>
+    );
+  }
 
-        {/* ── Empty ── */}
-        {!loading && !error && allFeedback.length === 0 && (
+  if (allFeedback.length === 0) {
+    return (
+      <DashboardLayout breadcrumb="Dashboard / Feedback Inbox">
+        <div style={{ padding: '20px 24px', fontFamily: FONT, width: '100%', boxSizing: 'border-box' }}>
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>Feedback Inbox</div>
+            <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>Interviewer feedback across all active jobs</div>
+          </div>
           <div style={{ textAlign: 'center', padding: '60px 20px', background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '12px' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: '#F9FAFB', border: '0.5px solid #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
               <MessageSquare size={22} color="#9CA3AF" />
@@ -468,75 +610,146 @@ export function GlobalFeedbackPage() {
             <div style={{ fontSize: '14px', fontWeight: 500, color: '#374151' }}>No feedback submitted yet</div>
             <div style={{ fontSize: '12px', color: '#9CA3AF', marginTop: '4px' }}>Feedback will appear here once interviewers submit it.</div>
           </div>
-        )}
+        </div>
+      </DashboardLayout>
+    );
+  }
 
-        {/* ── Main content ── */}
-        {!loading && !error && allFeedback.length > 0 && (
-          <>
-            {/* Summary stats */}
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
-              <StatPill value={allFeedback.length} label="Total"    color="#111827" />
-              <StatPill value={advanced}           label="Advanced" color="#059669" />
-              <StatPill value={rejected}           label="Rejected" color="#DC2626" />
-              <StatPill value={avgRating}          label="Avg Rating" color="#F07C2D" />
-            </div>
+  // ── VIEW 1: Job picker ──────────────────────────────────────────────────────
+  if (!selectedGroup) {
+    return (
+      <DashboardLayout breadcrumb="Dashboard / Feedback Inbox">
+        <div style={{ padding: '20px 24px', fontFamily: FONT, width: '100%', boxSizing: 'border-box' }}>
 
-            {/* Filters */}
-            <div style={{ background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {/* Verdict filter */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700, minWidth: '44px' }}>Verdict</span>
-                {(['all', 'advanced', 'rejected'] as const).map(v => (
-                  <button key={v} onClick={() => setFilter(v)} style={{
-                    padding: '4px 10px', borderRadius: '5px', fontSize: '11px', fontWeight: 500, cursor: 'pointer', fontFamily: FONT,
-                    background: filter === v ? '#111827' : 'transparent',
-                    color: filter === v ? '#fff' : '#6B7280',
-                    border: filter === v ? 'none' : '0.5px solid #E5E7EB',
-                  }}>
-                    {v.charAt(0).toUpperCase() + v.slice(1)}
-                  </button>
-                ))}
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>Feedback Inbox</div>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
+                Select a job to view interviewer feedback for its shortlisted candidates · {jobGroups.length} job{jobGroups.length !== 1 ? 's' : ''} with feedback
               </div>
+            </div>
+            <SearchBox value={jobSearch} onChange={setJobSearch} placeholder="Search jobs…" />
+          </div>
 
-              <div style={{ height: '0.5px', background: '#E5E7EB' }} />
+          {filteredJobGroups.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', fontSize: '13px', color: '#9CA3AF' }}>
+              No jobs match your search.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '12px' }}>
+              {filteredJobGroups.map(g => (
+                <JobFeedbackCard key={g.job.job_id} job={g.job} items={g.items} onClick={() => setSelectedJobId(g.job.job_id)} />
+              ))}
+            </div>
+          )}
+        </div>
+      </DashboardLayout>
+    );
+  }
 
-              {/* Round filter */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700, minWidth: '44px' }}>Round</span>
-                {([
+  // ── VIEW 2: Feedback within the selected job ────────────────────────────────
+  const advanced  = selectedGroup.items.filter(f => f.verdict === 'advance').length;
+  const rejected  = selectedGroup.items.filter(f => f.verdict !== 'advance').length;
+  const ratedItems = selectedGroup.items.filter(f => f.rating != null);
+  const avgRating = ratedItems.length > 0
+    ? (ratedItems.reduce((s, f) => s + (f.rating ?? 0), 0) / ratedItems.length).toFixed(1)
+    : '—';
+
+  return (
+    <DashboardLayout breadcrumb={`Dashboard / Feedback Inbox / ${selectedGroup.job.title}`}>
+      <div style={{ padding: '20px 24px', fontFamily: FONT, width: '100%', boxSizing: 'border-box' }}>
+
+        {/* ── Page header ── */}
+        <div style={{ marginBottom: '20px' }}>
+          <button
+            onClick={backToJobs}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', color: '#6B7280', fontSize: '12px', fontWeight: 500, fontFamily: FONT, cursor: 'pointer', padding: 0, marginBottom: '8px' }}
+          >
+            <ArrowLeft size={13} /> All jobs
+          </button>
+          <div style={{ fontSize: '17px', fontWeight: 600, color: '#111827', letterSpacing: '-0.02em' }}>{selectedGroup.job.title}</div>
+          <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
+            Feedback for shortlisted candidates · {selectedGroup.items.length} submission{selectedGroup.items.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+
+        {/* Summary stats */}
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <StatPill value={selectedGroup.items.length} label="Total"    color="#111827" />
+          <StatPill value={advanced}                   label="Advanced" color="#059669" />
+          <StatPill value={rejected}                   label="Rejected" color="#DC2626" />
+          <StatPill value={avgRating}                  label="Avg Rating" color="#F07C2D" />
+        </div>
+
+        {/* Filters + candidate search */}
+        <div style={{ background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {/* Candidate search */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700, minWidth: '44px' }}>Search</span>
+            <SearchBox value={candSearch} onChange={setCandSearch} placeholder="Search shortlisted candidates…" width="260px" />
+          </div>
+
+          <div style={{ height: '0.5px', background: '#E5E7EB' }} />
+
+          {/* Verdict + Round filters as dropdowns */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+            {/* <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700 }}>Verdict</span>
+              <FilterDropdown
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { key: 'all', label: 'All' },
+                  { key: 'advanced', label: 'Advanced' },
+                  { key: 'rejected', label: 'Rejected' },
+                ]}
+              />
+            </div> */}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700 }}>Round</span>
+              <FilterDropdown
+                value={roundFilter}
+                onChange={setRoundFilter}
+                options={[
                   { key: 'all', label: 'All' },
                   { key: 'round1', label: 'Round 1' },
                   { key: 'technical', label: 'Round 2' },
                   { key: 'hr', label: 'HR' },
-                ] as const).map(({ key, label }) => (
-                  <button key={key} onClick={() => setRoundFilter(key)} style={{
-                    padding: '4px 10px', borderRadius: '5px', fontSize: '11px', fontWeight: 500, cursor: 'pointer', fontFamily: FONT,
-                    background: roundFilter === key ? '#111827' : 'transparent',
-                    color: roundFilter === key ? '#fff' : '#6B7280',
-                    border: roundFilter === key ? 'none' : '0.5px solid #E5E7EB',
-                  }}>
-                    {label}
-                  </button>
-                ))}
-                <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#9CA3AF' }}>
-                  {filtered.length} result{filtered.length !== 1 ? 's' : ''}
-                </span>
-              </div>
+                ]}
+              />
             </div>
 
-            {/* Feedback list */}
-            {filtered.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px', background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', fontSize: '13px', color: '#9CA3AF' }}>
-                No feedback matches the selected filters.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {filtered.map((item, i) => (
-                  <FeedbackCard key={i} item={item} defaultExpanded={i === 0} />
-                ))}
-              </div>
-            )}
-          </>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11px', color: '#6B7280', fontWeight: 700 }}>Verdict</span>
+              <FilterDropdown
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { key: 'all', label: 'All' },
+                  { key: 'advanced', label: 'Advanced' },
+                  { key: 'rejected', label: 'Rejected' },
+                ]}
+              />
+            </div>
+
+            <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#9CA3AF' }}>
+              {jobScopedFiltered.length} result{jobScopedFiltered.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </div>
+
+        {/* Feedback list */}
+        {jobScopedFiltered.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px', background: '#fff', border: '0.5px solid #E5E7EB', borderRadius: '10px', fontSize: '13px', color: '#9CA3AF' }}>
+            {candSearch ? 'No candidates match your search.' : 'No feedback matches the selected filters.'}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {jobScopedFiltered.map((item, i) => (
+              <FeedbackCard key={i} item={item} defaultExpanded={i === 0} showJobTitle={false} />
+            ))}
+          </div>
         )}
       </div>
     </DashboardLayout>
