@@ -435,24 +435,37 @@ function OfferChatPanel({
   };
 
   // ── File Upload Handler ──
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
 
-    // ── NEW: Handle Signature Image Uploads ──
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          setSignature({ url: ev.target.result as string, x: 50, y: 50, width: 150, height: 50 });
-          onAddUserMsg(`Uploaded signature: ${file.name}`);
-          onAddBotMsg("Signature uploaded! 👉 You can now drag and drop it anywhere on the live preview document.");
-        }
-      };
-      reader.readAsDataURL(file);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
+  // ── File Upload Handler ──
+const MAX_FILE_SIZE_MB = 5;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  // ── NEW: Enforce 5MB max file size ──
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    showToast?.(`File too large. Please upload a file under ${MAX_FILE_SIZE_MB}MB.`, 'error');
+    onAddBotMsg(`⚠️ That file is **${(file.size / (1024 * 1024)).toFixed(1)}MB**, which is over the ${MAX_FILE_SIZE_MB}MB limit. Please choose a smaller file.`);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    return;
+  }
+
+  // ── NEW: Handle Signature Image Uploads ──
+  if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      if (ev.target?.result) {
+        setSignature({ url: ev.target.result as string, x: 50, y: 50, width: 150, height: 50 });
+        onAddUserMsg(`Uploaded signature: ${file.name}`);
+        onAddBotMsg("Signature uploaded! 👉 You can now drag and drop it anywhere on the live preview document.");
+      }
+    };
+    reader.readAsDataURL(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    return;
+  }
 
     onAddUserMsg(`Uploaded template: ${file.name}`);
     onSetTyping(true);
