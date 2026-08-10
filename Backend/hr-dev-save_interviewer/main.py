@@ -207,6 +207,31 @@ def save_interviewer_slots(request):
         )
         bq_client.query(cleanup_query, job_config=cleanup_config).result()
 
+        # ── Auto-grant login access for this interviewer ───────────────
+        users_table_id = f"{project_id}.{dataset_id}.users"
+
+        grant_query = f"""
+            MERGE `{users_table_id}` T
+            USING (SELECT @email AS email) S
+            ON T.email = S.email
+            WHEN MATCHED AND NOT CONTAINS_SUBSTR(T.roles, 'interviewer') THEN
+                UPDATE SET roles = CONCAT(T.roles, ',interviewer')
+            WHEN NOT MATCHED THEN
+                INSERT (user_id, email, name, roles, status, source, granted_by, created_at)
+                VALUES (
+                    @user_id, @email, @name, 'interviewer', 'active',
+                    'auto_via_assignment', 'system', CURRENT_TIMESTAMP()
+                )
+        """
+        grant_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", str(uuid.uuid4())),
+                bigquery.ScalarQueryParameter("email",   "STRING", interviewer.get("email")),
+                bigquery.ScalarQueryParameter("name",    "STRING", interviewer.get("name")),
+            ]
+        )
+        bq_client.query(grant_query, job_config=grant_config).result()
+
         return (
             {
                 "success": True,

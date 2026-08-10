@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { ArrowRight, BrainCircuit, Zap, ShieldCheck, Users } from 'lucide-react';
+import { ArrowRight, BrainCircuit, Zap, ShieldCheck, Users, LogIn, ChevronDown, LogOut } from 'lucide-react';
+import { useAuth } from '../components/AuthContext';
 
 // ── Design Tokens ─────────────────────────────────────────────────────────────
 const T = {
@@ -248,12 +249,54 @@ function CandidateRow({
   );
 }
 
+// ── Session expired banner ────────────────────────────────────────────────────
+function SessionExpiredBanner() {
+  return (
+    <div style={{
+      position: 'fixed', top: '72px', left: '50%', transform: 'translateX(-50%)',
+      zIndex: 200,
+      background: '#2a1a1a', border: '1px solid rgba(255,107,107,0.4)',
+      color: '#ff9b9b', fontSize: '13px', fontFamily: T.font,
+      padding: '10px 18px', borderRadius: '10px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+    }}>
+      Session expired — please log in again.
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const navigate = useNavigate();
+  const { isAuthenticated, sessionExpired, user, logout } = useAuth();
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showExpiredBanner, setShowExpiredBanner] = useState(false);
+
+  useEffect(() => {
+    if (sessionExpired) {
+      setShowExpiredBanner(true);
+      const t = setTimeout(() => setShowExpiredBanner(false), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [sessionExpired]);
+
+  // Used by every "Open dashboard" CTA. Logged in -> straight to dashboard.
+  // Not logged in / expired -> go to login (and flash the banner if expired).
+  function handleDashboardClick() {
+    if (isAuthenticated) {
+      navigate('/dashboard');
+      return;
+    }
+    if (sessionExpired) {
+      setShowExpiredBanner(true);
+    }
+    navigate('/login');
+  }
 
   return (
     <div style={{ minHeight: '100vh', background: T.offWhite, fontFamily: T.font, display: 'flex', flexDirection: 'column' }}>
+
+      {showExpiredBanner && <SessionExpiredBanner />}
 
       {/* ── Navbar ────────────────────────────────────────────────────────── */}
       <nav style={{
@@ -268,7 +311,7 @@ export default function LandingPage() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <img
-            src="/company-logo.png"
+            src="/company-logo1.png"
             alt="Atgeir Solutions"
             style={{ height: '30px', width: 'auto', objectFit: 'contain' }}
           />
@@ -281,21 +324,71 @@ export default function LandingPage() {
           </span>
         </div>
 
-        <button
-          onClick={() => navigate('/dashboard')}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '8px 18px', borderRadius: '8px',
-            background: T.navy, color: T.white,
-            fontSize: '13px', fontWeight: 500,
-            fontFamily: T.font, border: 'none', cursor: 'pointer',
-            transition: 'opacity 0.15s',
-          }}
-          onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
-          onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
-        >
-          Open dashboard <ArrowRight size={14} />
-        </button>
+        {isAuthenticated && user ? (
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowAccountMenu(v => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '7px',
+                padding: '8px 16px', borderRadius: '8px',
+                background: T.navy, color: T.white,
+                fontSize: '13px', fontWeight: 500,
+                fontFamily: T.font, border: 'none', cursor: 'pointer',
+              }}
+            >
+              {user.email} <ChevronDown size={14} />
+            </button>
+            {showAccountMenu && (
+              <div style={{
+                position: 'absolute', top: '44px', right: 0,
+                background: T.navy, borderRadius: '8px',
+                border: '0.5px solid rgba(255,255,255,0.12)',
+                minWidth: '160px', overflow: 'hidden',
+                boxShadow: '0 12px 32px rgba(0,0,0,0.35)',
+              }}>
+                <button
+                  onClick={() => { setShowAccountMenu(false); navigate('/dashboard'); }}
+                  style={{
+                    width: '100%', textAlign: 'left', padding: '10px 14px',
+                    background: 'none', border: 'none', color: T.white,
+                    fontSize: '13px', fontFamily: T.font, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                  }}
+                >
+                  <ArrowRight size={14} /> Open dashboard
+                </button>
+                <button
+                  onClick={() => { setShowAccountMenu(false); logout(); navigate('/'); }}
+                  style={{
+                    width: '100%', textAlign: 'left', padding: '10px 14px',
+                    background: 'none', border: 'none', color: '#ff9b9b',
+                    fontSize: '13px', fontFamily: T.font, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    borderTop: '0.5px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <LogOut size={14} /> Logout
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={() => navigate('/login')}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '7px',
+              padding: '8px 18px', borderRadius: '8px',
+              background: T.navy, color: T.white,
+              fontSize: '13px', fontWeight: 500,
+              fontFamily: T.font, border: 'none', cursor: 'pointer',
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+          >
+            Login <LogIn size={14} />
+          </button>
+        )}
       </nav>
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
@@ -389,7 +482,7 @@ export default function LandingPage() {
           {/* CTA */}
           <div style={{ animation: 'fadeUp 0.95s ease both', display: 'flex', justifyContent: 'center', gap: '12px' }}>
             <button
-              onClick={() => navigate('/dashboard')}
+              onClick={handleDashboardClick}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '9px',
                 padding: '14px 28px', borderRadius: '10px',
@@ -525,7 +618,7 @@ export default function LandingPage() {
               Ranked by AI match score
             </span>
             <button
-              onClick={() => navigate('/dashboard')}
+              onClick={handleDashboardClick}
               style={{
                 fontSize: '11px', fontWeight: 600, color: T.orange,
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -605,7 +698,7 @@ export default function LandingPage() {
           Your next great hire is already in the pile.
         </p>
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={handleDashboardClick}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '8px',
             padding: '13px 26px', borderRadius: '10px',
@@ -629,7 +722,7 @@ export default function LandingPage() {
         borderTop: '0.5px solid rgba(255,255,255,0.06)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <img src="/company-logo.png" alt="Atgeir" style={{ height: '22px', opacity: 0.6 }} />
+          <img src="/company-logo1.png" alt="Atgeir" style={{ height: '22px', opacity: 0.6 }} />
           <span style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.12)' }} />
           <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', fontFamily: T.font }}>
             HireDesk

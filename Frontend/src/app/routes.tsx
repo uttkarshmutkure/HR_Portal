@@ -10,6 +10,8 @@ import CandidateTimelinePage   from "./pages/CandidateTimelinePage";
 import FeedbackFormPage        from "./pages/FeedbackFormPage";
 import CandidateSlotPage       from "./pages/Candidateslotpage";
 import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IMPORT
+import LoginPage               from "./pages/LoginPage";
+import ProtectedRoute          from "./components/ProtectedRoute";
 
 // ── Import the Global Hub Pages ──
 import { 
@@ -25,22 +27,42 @@ export const router = createBrowserRouter([
     Component: LandingPage,
   },
   {
+    path: "/login",
+    Component: LoginPage,
+  },
+  {
     path: "/dashboard", 
-    Component: DashboardPage,
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <DashboardPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/jobs",
-    Component: JobListPage,
+    element: (
+      <ProtectedRoute>
+        <JobListPage />
+      </ProtectedRoute>
+    ),
   },
   
   // ── Global Sidebar Hub Routes ──
   {
     path: "/shortlisted",
-    Component: GlobalShortlistedPage,
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <GlobalShortlistedPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/interviews",
-    Component: GlobalInterviewsPage,
+    element: (
+      <ProtectedRoute>
+        <GlobalInterviewsPage />
+      </ProtectedRoute>
+    ),
   },
   // {
   //   path: "/timeline",
@@ -48,34 +70,62 @@ export const router = createBrowserRouter([
   // },
   {
     path: "/feedback",
-    Component: GlobalFeedbackPage,
+    element: (
+      <ProtectedRoute>
+        <GlobalFeedbackPage />
+      </ProtectedRoute>
+    ),
   },
 
   // ── Dynamic / Specific Job & Candidate Routes ──
   {
     path: "/jobs/:jobId/candidates/:candidateId/timeline",
-    Component: CandidateTimelinePage,
+    element: (
+      <ProtectedRoute>
+        <CandidateTimelinePage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/jobs/:jobId/candidates/:candidateId",
-    Component: CandidateDetailPage,
+    element: (
+      <ProtectedRoute>
+        <CandidateDetailPage />
+      </ProtectedRoute>
+    ),
   },
   // ── NEW: Dedicated Offer Copilot Route ──
   {
     path: "/jobs/:jobId/candidates/:candidateId/offer",
-    Component: OfferGenerationPage,
+    element: (
+      <ProtectedRoute>
+        <OfferGenerationPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/jobs/:jobId/shortlisted",
-    Component: ShortlistedPage,
+    element: (
+      <ProtectedRoute>
+        <ShortlistedPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/jobs/:jobId/pipeline",
-    Component: InterviewPipelinePage,
+    element: (
+      <ProtectedRoute>
+        <InterviewPipelinePage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/jobs/:jobId",
-    Component: JobResultsPage,
+    element: (
+      <ProtectedRoute>
+        <JobResultsPage />
+      </ProtectedRoute>
+    ),
   },
   
   // ── Public feedback link (no auth) ──
