@@ -28,6 +28,7 @@ const T = {
 const DATA_MANAGER_URL = import.meta.env.VITE_DATA_MANAGER_URL;
 const SAVE_INTERVIEWER_URL = import.meta.env.VITE_SAVE_INTERVIEWER_URL;
 const RUN_PIPELINE_URL = import.meta.env.VITE_RUN_PIPELINE_URL;
+const REFER_CANDIDATE_URL = import.meta.env.VITE_REFER_CANDIDATE_URL;
 
 // ── Types ──────────────────────────────────────────────────────────────
 export interface DaySlot {
@@ -144,18 +145,27 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
 }) {
   const [showSlots, setShowSlots] = useState(false);
 
-  const isNewFormat = inv.slots && !inv.slots.includes('|');
-  const daySlots = isNewFormat ? deserializeDaySlots(inv.slots || '') : [];
-  const legacySlots = !isNewFormat ? parseSlots(inv.slots || '') : [];
+  // New backend shape: inv.slotDetails is a flat array of { day, start_time, end_time, status }
+  const flatSlots: { day: string; start_time: string; end_time: string; status: string }[] = inv.slotDetails || [];
 
-  const slotCount = isNewFormat
-    ? daySlots.reduce((acc, d) => acc + d.timeRanges.length, 0)
-    : legacySlots.length;
+  // Group flat slots back into day buckets for display (same shape the UI expects downstream)
+  const daySlotsMap: Record<string, { start: string; end: string }[]> = {};
+  flatSlots.forEach(s => {
+    if (!daySlotsMap[s.day]) daySlotsMap[s.day] = [];
+    daySlotsMap[s.day].push({ start: s.start_time, end: s.end_time });
+  });
+  const daySlots: DaySlot[] = Object.entries(daySlotsMap).map(([day, timeRanges]) => ({
+    day,
+    workMode: (inv.work_mode as 'WFO' | 'WFH') || 'WFO',
+    timeRanges,
+  }));
+
+  const slotCount = flatSlots.length;
 
   const roundText = inv.round === 'technical' ? 'Round 2' : inv.round === 'hr' ? 'HR Round' : 'Round 1';
 
   // Collect all distinct work modes across days for the card header badge
-  const allModes = isNewFormat
+  const allModes = daySlots.length > 0
     ? [...new Set(daySlots.map(d => d.workMode || 'WFO'))]
     : [inv.work_mode || 'WFO'];
 
@@ -206,11 +216,11 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
 
       {showSlots && (
         <div style={{ padding: '10px 14px', borderTop: `0.5px solid ${T.gray200}`, background: T.white, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {isNewFormat && daySlots.length === 0 && (
+          {daySlots.length === 0 && (
             <div style={{ fontSize: '11px', color: '#9CA3AF', padding: '4px 0' }}>No slots available.</div>
           )}
 
-          {isNewFormat && daySlots.map((ds, di) => (
+          {daySlots.map((ds, di) => (
             <div key={di}>
               {/* Day header with work mode badge */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
@@ -225,26 +235,6 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
                   </div>
                 </div>
               ))}
-            </div>
-          ))}
-
-          {!isNewFormat && legacySlots.length === 0 && (
-            <div style={{ fontSize: '11px', color: '#9CA3AF', padding: '4px 0' }}>No slots available.</div>
-          )}
-          {!isNewFormat && legacySlots.map((slot, si) => (
-            <div key={si} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: T.gray50, borderRadius: '6px', border: `0.5px solid ${T.gray200}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Calendar size={11} style={{ color: T.orange, flexShrink: 0 }} />
-                <span style={{ fontSize: '11px', fontWeight: 600, color: T.text, fontFamily: FONT }}>{slot.day}, {slot.date}</span>
-                <span style={{ fontSize: '11px', color: T.gray400 }}>·</span>
-                <span style={{ fontSize: '11px', color: T.textSub, fontFamily: FONT }}>{slot.time}</span>
-              </div>
-              <X
-                size={14}
-                style={{ cursor: 'pointer', color: '#9CA3AF' }}
-                onClick={() => { if (window.confirm('Delete this time slot?')) onRemoveSlot(inv.id, si); }}
-                title="Remove this slot"
-              />
             </div>
           ))}
         </div>
@@ -811,8 +801,31 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     const handleSubmit = async () => {
       setIsSubmitting(true);
       try {
-        // TODO: wire to actual referral endpoint once available
-        showToast(`Referral submitted for ${firstName} ${lastName}!`, 'success');
+        const formData = new FormData();
+        formData.append('job_id', job.job_id);
+        formData.append('first_name', firstName);
+        formData.append('middle_name', middleName);
+        formData.append('last_name', lastName);
+        formData.append('email', email);
+        formData.append('phone', `${phoneCode}${phone}`);
+        formData.append('gender', gender);
+        formData.append('experience_years', expYears);
+        formData.append('experience_months', expMonths);
+        formData.append('salary_currency', salaryCurrency);
+        formData.append('salary_amount', salaryAmount);
+        formData.append('salary_freq', salaryFreq);
+        formData.append('fit_reason', fitReason);
+        if (resumeFile) formData.append('resume', resumeFile);
+
+        const res = await fetch(REFER_CANDIDATE_URL, {
+          method: 'POST',
+          body: formData, // NOTE: Never manually set Content-Type for FormData in fetch()
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.error) throw new Error(data.error || 'Referral failed');
+
+        showToast(`${firstName} ${lastName} has been referred and shortlisted!`, 'success');
         setShowReferModal(false);
       } catch (err) {
         showToast('Failed to submit referral.', 'error');
@@ -963,7 +976,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
             <button onClick={() => setShowReferModal(false)} style={{ padding: '8px 16px', borderRadius: '7px', fontSize: '13px', fontWeight: 500, background: T.white, border: `1px solid ${T.gray200}`, cursor: 'pointer', color: T.textSub, fontFamily: FONT }}>Cancel</button>
             <button
               onClick={handleSubmit}
-              disabled={!firstName || !lastName || !email || isSubmitting}
+              disabled={!firstName || !lastName || !email || !resumeFile || isSubmitting}
               style={{ padding: '8px 20px', borderRadius: '7px', fontSize: '13px', fontWeight: 600, background: '#5B5FCF', color: T.white, border: 'none', cursor: (!firstName || !lastName || !email || isSubmitting) ? 'not-allowed' : 'pointer', opacity: (!firstName || !lastName || !email || isSubmitting) ? 0.6 : 1, fontFamily: FONT }}
             >
               {isSubmitting ? 'Submitting…' : 'Refer'}

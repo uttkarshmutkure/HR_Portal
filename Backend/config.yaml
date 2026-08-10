@@ -128,26 +128,26 @@ paths:
         '204':
           description: No Content
 
-  # =========================
-  # DAM CF4 - Video Upload Update BQ
-  # =========================
-  /dam_video-upload-update-bq:
-    post:
-      summary: Auto-updates BigQuery metadata when a video is uploaded to GCS bucket
-      operationId: dam-cf4-video-upload-update-bq
-      x-google-backend:
-        address: https://dam-cf4-video-upload-update-bq-7dmabce4qq-el.a.run.app
-      responses:
-        '200':
-          description: BigQuery metadata updated successfully
-    options:
-      summary: CORS preflight
-      operationId: dam-cf4-video-upload-update-bq-cors
-      x-google-backend:
-        address: https://dam-cf4-video-upload-update-bq-7dmabce4qq-el.a.run.app
-      responses:
-        '204':
-          description: No Content
+  # # =========================
+  # # DAM CF4 - Video Upload Update BQ
+  # # =========================
+  # /dam_video-upload-update-bq:
+  #   post:
+  #     summary: Auto-updates BigQuery metadata when a video is uploaded to GCS bucket
+  #     operationId: dam-cf4-video-upload-update-bq
+  #     x-google-backend:
+  #       address: https://dam-cf4-video-upload-update-bq-7dmabce4qq-el.a.run.app
+  #     responses:
+  #       '200':
+  #         description: BigQuery metadata updated successfully
+  #   options:
+  #     summary: CORS preflight
+  #     operationId: dam-cf4-video-upload-update-bq-cors
+  #     x-google-backend:
+  #       address: https://dam-cf4-video-upload-update-bq-7dmabce4qq-el.a.run.app
+  #     responses:
+  #       '204':
+  #         description: No Content
 
   # =========================
   # DAM CF5 - Process Images
@@ -1660,6 +1660,73 @@ paths:
         '204':
           description: No Content
 
+  # =========================
+  # HR SCREENING - Refer Candidate
+  # =========================
+  /hr-screening/refer-candidate:
+    post:
+      summary: Refer a friend — uploads resume, extracts fields, inserts candidate (Referred) and referral record
+      operationId: hr-screening-refer-candidate-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-refer-candidate
+        deadline: 120.0
+      responses:
+        '200':
+          description: Success — candidate_id and referral_id returned
+        '400':
+          description: Missing required fields (job_id, first_name, last_name, email, or resume)
+        '422':
+          description: Resume could not be parsed
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-refer-candidate-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-refer-candidate
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+          
+  # =========================
+  # HR SCREENING - Get Candidate Slots
+  # =========================
+  /hr-screening/get-candidate-slots:
+    post:
+      summary: Fetch top available interviewer slots for a job/round to offer to a candidate
+      operationId: hr-screening-get-candidate-slots-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-get-candidate-slots
+        deadline: 60.0
+      responses:
+        '200':
+          description: Success — list of available slots returned
+        '400':
+          description: Missing required fields (jobId)
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-get-candidate-slots-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-get-candidate-slots
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+
+
   # TrendCraft Cloud Functions #
   # ---------------- IMAGE GENERATION ----------------
   /trendcraft/generate-image:
@@ -2248,6 +2315,116 @@ paths:
 
       x-google-backend:
         address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/svs_get_claim_result
+
+      responses:
+        '204':
+          description: No Content
+
+  /nykaa-image-to-image-search:
+    post:
+      summary: Image-to-Image Search
+      operationId: imageSimilaritySearch
+
+      x-google-backend:
+        address: https://nykaa-image-to-image-search-621913909275.asia-south1.run.app
+        path_translation: CONSTANT_ADDRESS
+        deadline: 600.0
+
+      consumes:
+        - application/json
+
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - image_base64
+            properties:
+              image_base64:
+                type: string
+                description: Base64 encoded image
+              mime_type:
+                type: string
+                example: image/jpeg
+                description: Optional. Defaults to image/jpeg.
+
+      responses:
+        '200':
+          description: Similar images returned successfully
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal Server Error
+
+    options:
+      summary: CORS preflight
+      operationId: corsImageSimilaritySearch
+
+      x-google-backend:
+        address: https://nykaa-image-to-image-search-621913909275.asia-south1.run.app
+        path_translation: CONSTANT_ADDRESS
+        deadline: 600.0
+
+      responses:
+        '204':
+          description: No Content
+
+
+  /fashion-conversational-search:
+    post:
+      summary: Conversational Fashion Product Search
+      operationId: fashionConversationalSearch
+
+      x-google-backend:
+        address: https://nykaa-text-to-product-search-621913909275.asia-south1.run.app
+        path_translation: CONSTANT_ADDRESS
+        deadline: 600.0
+
+      consumes:
+        - application/json
+
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              history:
+                type: array
+                description: Previous conversation history.
+                items:
+                  type: object
+                  properties:
+                    role:
+                      type: string
+                      example: user
+                    content:
+                      type: string
+              message:
+                type: string
+                description: Latest user message.
+
+      responses:
+        '200':
+          description: Successful response
+        '400':
+          description: Invalid request
+        '500':
+          description: Internal Server Error
+
+    options:
+      summary: CORS preflight
+      operationId: corsFashionConversationalSearch
+
+      x-google-backend:
+        address: https://nykaa-text-to-product-search-621913909275.asia-south1.run.app
+        path_translation: CONSTANT_ADDRESS
+        deadline: 600.0
 
       responses:
         '204':

@@ -154,9 +154,9 @@ def auto_matchmaker(request):
 
         def fetch_interviewers():
             return [dict(r) for r in bq_client.query(
-                f"SELECT slot_id, Interviewer_name, Interviewer_email, slot_details_json "
+                f"SELECT slot_id, Interviewer_name, Interviewer_email, day, start_time, end_time, work_mode "
                 f"FROM `{project_id}.{dataset_id}.interviewer_slots` "
-                f"WHERE job_id = '{job_id}' AND `round` = '{interview_round}' AND status = 'free'"
+                f"WHERE job_id = '{job_id}' AND `round` = '{interview_round}' AND status IN ('free', 'on_hold')"
             )]
 
         with ThreadPoolExecutor(max_workers=3) as ex:
@@ -193,8 +193,8 @@ def auto_matchmaker(request):
             You are an HR Matchmaker Agent. Match candidate time preferences with interviewer availability, book the slot, generate a Google Meet link, and send HTML emails.
 
             PROCESS:
-            1. MATCH: Find an overlap between SELECTED SLOTS and interviewers' slot_details_json.
-            2. BOOK: Call book_interview_in_db (round_id = {interview_round}).
+            1. MATCH: Each entry in FREE INTERVIEWERS is a single available slot (slot_id, Interviewer_name, Interviewer_email, day, start_time, end_time, work_mode). Find an overlap between SELECTED SLOTS and any interviewer slot on the same day with matching time.
+            2. BOOK: Call book_interview_in_db, passing the matched interviewer slot's `slot_id` as `interviewer_id`, the matched slot's `Interviewer_name` as `interviewer_name`, `Interviewer_email` as `interviewer_email`, job_id="{job_id}", job_title="{job_title}", round_id="{interview_round}", the matched slot's `day`-derived actual calendar date as `date` (format YYYY-MM-DD), `start_time` and `end_time` from the matched slot, and `work_mode` from the matched slot.
             3. MEET: Call create_meet_link (duration_mins = {ROUND_DURATIONS.get(interview_round, 45)}).
             4. FEEDBACK LINK: Call generate_feedback_link(candidate_id="{candidate_id}", job_id="{job_id}", round_id="{interview_round}", candidate_name="{candidate_name}", job_title="{job_title}") to get the FEEDBACK_LINK. Use the returned value EXACTLY as-is — do not retype, shorten, or alter it.
             5. EMAIL: Send TWO emails using the exact HTML templates below — fill in the placeholders with actual values. You MUST call send_email_tool twice: once for the candidate and once for the interviewer.
@@ -211,7 +211,7 @@ def auto_matchmaker(request):
             - ROUND — human readable e.g. "Round 1", "Technical Round"
             - DATE — formatted as "Wednesday, 10 June 2026"
             - TIME — formatted as "10:30 AM - 11:00 AM"
-            - MODE — WFO or WFH based on the matched slot's work_mode
+            - MODE — based on the matched slot's work_mode: if work_mode is "WFH", use "Online (Virtual)"; if work_mode is "WFO", use "In-Person (Office)"
             - MEET_LINK — from create_meet_link result
             - FEEDBACK_LINK — from generate_feedback_link result (interviewer email only)
             - REVIEW_LINK — from generate_candidate_review_link result (candidate email only)
@@ -223,7 +223,7 @@ def auto_matchmaker(request):
             {{round}} → human readable round name
             {{date}} → formatted date
             {{time}} → formatted time range
-            {{mode}} → WFO or WFH
+            {{mode}} → "Online (Virtual)" if work_mode is WFH, or "In-Person (Office)" if work_mode is WFO
             {{meet_link}} → Google Meet URL
             {{feedback_link}} → exact return value of generate_feedback_link, unmodified
             {{review_link}} → exact return value of generate_candidate_review_link, unmodified
@@ -256,6 +256,23 @@ def auto_matchmaker(request):
         # Case-insensitive match check
         if "no match found" in agent_response.text.lower():
             return ({"success": True, "matchSuccess": False, "message": "No match found. Manual assignment required.", "agentLog": agent_response.text}, 200, headers)
+
+        try:
+            release_query = f"""
+                UPDATE `{project_id}.{dataset_id}.interviewer_slots`
+                SET status = 'free'
+                WHERE job_id = @job_id
+                  AND `round` = @round
+                  AND status = 'on_hold'
+            """
+            bq_client.query(release_query, job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                    bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                ]
+            )).result()
+        except Exception as release_err:
+            print(f"[MATCHMAKER] Failed to release on_hold slots: {release_err}")
 
         return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": agent_response.text}, 200, headers)
 

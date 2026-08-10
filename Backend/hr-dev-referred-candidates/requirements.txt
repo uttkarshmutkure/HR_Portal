@@ -1,0 +1,18 @@
+# Refer a Friend — Cloud Function Dependencies
+# Used by: main.py, referral_processing.py, referral_table.py, resume_processing.py
+
+functions-framework==3.*
+
+# Google Cloud
+google-cloud-storage==2.*
+google-cloud-bigquery==3.*
+google-cloud-aiplatform==1.*
+
+# Gemini / Vertex AI (used by resume_processing.py for field extraction + embeddings)
+google-genai==1.*
+
+# PDF extraction
+PyMuPDF==1.*
+
+# Date math (used in experience calculation)
+python-dateutil==2.*
