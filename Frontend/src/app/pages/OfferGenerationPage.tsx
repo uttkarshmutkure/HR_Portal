@@ -164,7 +164,7 @@ export default function OfferGenerationPage() {
     return [];
   });
 
-  const [signature, setSignature] = useState<{ url: string, x: number, y: number } | null>(null);
+  const [signature, setSignature] = useState<{ url: string, x: number, y: number, width: number, height: number } | null>(null);
   const [salaryRules, setSalaryRules] = useState<SalaryRules>(() => {
     if (location.state?.salaryRules) return location.state.salaryRules;
     const saved = localStorage.getItem(storageKey);
@@ -317,8 +317,8 @@ interface OfferChatPanelProps {
   setTemplateHtml: (val: string | null) => void;
   customFields: {name: string, description: string}[];
   setCustomFields: (val: {name: string, description: string}[]) => void;
-  signature: { url: string, x: number, y: number } | null;
-  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number } | null>>;
+  signature: { url: string, x: number, y: number, width: number, height: number } | null;
+  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number, width: number, height: number } | null>>;
   salaryRules: SalaryRules;
   showGenerateChoiceModal: boolean;
   setShowGenerateChoiceModal: (val: boolean) => void;
@@ -326,6 +326,41 @@ interface OfferChatPanelProps {
   setShowSalaryModal: (val: boolean) => void;
   setSalaryRules: (val: SalaryRules) => void;
   onBack: () => void;
+}
+
+function EmailPreviewModal({ subject, body, onSubjectChange, onBodyChange, onConfirm, onClose }: {
+  subject: string; body: string;
+  onSubjectChange: (v: string) => void; onBodyChange: (v: string) => void;
+  onConfirm: () => void; onClose: () => void;
+}) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 520, maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: TEXT_DARK }}>Review Offer Email</div>
+        <div style={{ fontSize: 12, color: TEXT_MID, marginBottom: 16 }}>Edit the subject or message before sending. The offer letter PDF is attached automatically.</div>
+
+        <label style={labelStyle}>Subject</label>
+        <input
+          value={subject}
+          onChange={e => onSubjectChange(e.target.value)}
+          style={{ ...inputStyle, marginBottom: 14 }}
+        />
+
+        <label style={labelStyle}>Message</label>
+        <textarea
+          value={body}
+          onChange={e => onBodyChange(e.target.value)}
+          rows={12}
+          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+        />
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+          <button onClick={onClose} style={{ padding: '8px 14px', borderRadius: 8, border: `1px solid ${BORDER}`, background: '#fff', fontSize: 13, cursor: 'pointer', color: TEXT_DARK }}>Cancel</button>
+          <button onClick={onConfirm} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#10B981', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Send Offer</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function OfferChatPanel({
@@ -342,6 +377,10 @@ function OfferChatPanel({
   const [viewMode, setViewMode] = useState<'chat-only' | 'chat-preview' | 'form-preview'>('chat-only');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [pendingPdfBase64, setPendingPdfBase64] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -405,7 +444,7 @@ function OfferChatPanel({
       const reader = new FileReader();
       reader.onload = (ev) => {
         if (ev.target?.result) {
-          setSignature({ url: ev.target.result as string, x: 50, y: 50 });
+          setSignature({ url: ev.target.result as string, x: 50, y: 50, width: 150, height: 50 });
           onAddUserMsg(`Uploaded signature: ${file.name}`);
           onAddBotMsg("Signature uploaded! 👉 You can now drag and drop it anywhere on the live preview document.");
         }
@@ -606,15 +645,35 @@ function OfferChatPanel({
     }
   };
 
-  // ── Send formal offer (actual logic, called after user confirms in modal) ──
-  const handleSendOffer = async () => {
+  // ── Step 1: Generate PDF + open the editable email preview modal ──
+  const handlePrepareSendOffer = async () => {
     if (!draft.baseCTC || !draft.joiningDate) return;
     onSetTyping(true);
 
     try {
-      const rawHtml = document.getElementById('offer-letter-content')?.innerHTML || '';
-      
-      // 1. Create a hidden sandbox (iframe)
+      const contentEl = document.getElementById('offer-letter-content');
+      if (!contentEl) throw new Error('Preview content not found');
+
+      const clone = contentEl.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('.no-print').forEach(el => el.remove());
+
+      const actualWidth = contentEl.getBoundingClientRect().width || 800;
+      const scaleRatio = 800 / actualWidth;
+
+      const sigWrapper = clone.querySelector('#signature-wrapper') as HTMLElement | null;
+      if (sigWrapper) {
+        const curLeft = parseFloat(sigWrapper.style.left) || 0;
+        const curTop = parseFloat(sigWrapper.style.top) || 0;
+        const curWidth = parseFloat(sigWrapper.style.width) || 0;
+        const curHeight = parseFloat(sigWrapper.style.height) || 0;
+        sigWrapper.style.left = `${curLeft * scaleRatio}px`;
+        sigWrapper.style.top = `${curTop * scaleRatio}px`;
+        sigWrapper.style.width = `${curWidth * scaleRatio}px`;
+        sigWrapper.style.height = `${curHeight * scaleRatio}px`;
+      }
+
+      const scaledHtml = clone.innerHTML;
+
       const iframe = document.createElement('iframe');
       iframe.style.position = 'absolute';
       iframe.style.width = '800px';
@@ -622,24 +681,22 @@ function OfferChatPanel({
       iframe.style.top = '-9999px';
       document.body.appendChild(iframe);
 
-      // 2. Wrap generation in a Promise that waits for the iframe to load
       const base64Data = await new Promise<string>((resolve, reject) => {
         iframe.onload = async () => {
           try {
-            // Run html2pdf ENTIRELY INSIDE the iframe to escape global CSS
             const iWin = iframe.contentWindow as any;
             const element = iWin.document.getElementById('clean-render');
-            
+
             const opt = {
               margin:       10,
               filename:     `Offer_Letter_${firstName}.pdf`,
               image:        { type: 'jpeg', quality: 1.0 },
-              html2canvas:  { scale: 2, useCORS: true }, 
+              html2canvas:  { scale: 2, useCORS: true },
               jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
             };
 
             const pdfDataUri = await iWin.html2pdf().set(opt).from(element).outputPdf('datauristring');
-            resolve(pdfDataUri.split(',')[1]); // Extract base64 payload
+            resolve(pdfDataUri.split(',')[1]);
           } catch (e) {
             reject(e);
           }
@@ -656,58 +713,62 @@ function OfferChatPanel({
                   body { margin: 0; padding: 20px; font-family: Arial, sans-serif; background: #fff; }
                   * { box-sizing: border-box; }
                 </style>
-                <!-- Load the PDF engine INSIDE the sandbox -->
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"><\/script>
               </head>
               <body>
-                <div id="clean-render" style="position: relative;">${rawHtml}</div>
+                <div id="clean-render" style="position: relative;">${scaledHtml}</div>
               </body>
             </html>
           `);
           iframeDoc.close();
         }
       });
-      
-      // Clean up the sandbox
+
       document.body.removeChild(iframe);
 
-      // 3. Calculate a dynamic deadline
-      const deadline = new Date();
-      deadline.setDate(deadline.getDate() + 3);
-      const deadlineStr = deadline.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      const validityDays = salaryRules.offerValidityDays || 7;
 
-      // 4. Construct your email HTML
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; color: #374151; max-width: 600px;">
-          <p>Dear ${cand.name},</p>
-          <p>Congratulations!</p>
-          <p>We are delighted to offer you the position of <strong>${draft.designation || jdTitle}</strong> at Atgeir Solutions.</p>
-          <p>Please find your offer letter attached with this email. Kindly review the document and share your acceptance before <strong>${deadlineStr}</strong>.</p>
-          <p>If you have any questions regarding the offer or onboarding process, feel free to contact us.</p>
-          <p>We look forward to welcoming you to the team.</p>
-          <p>Best regards,<br/><strong>HR Team — Atgeir Solutions</strong></p>
-        </div>
-      `;
+      const defaultBody = `Dear ${cand.name},\n\nCongratulations!\n\nWe are delighted to offer you the position of ${draft.designation || jdTitle} at Atgeir Solutions.\n\nPlease find your offer letter attached with this email. Kindly review the document and share your acceptance within ${validityDays} days of receiving this offer.\n\nIf you have any questions regarding the offer or onboarding process, feel free to contact us.\n\nWe look forward to welcoming you to the team.\n\nBest regards,\nHR Team — Atgeir Solutions`;
 
-      // 5. Send to your Python backend
+      setEmailSubject(`Offer Letter — ${draft.designation || jdTitle} at Atgeir Solutions`);
+      setEmailBody(defaultBody);
+      setPendingPdfBase64(base64Data);
+      setShowEmailModal(true);
+      onSetTyping(false);
+
+    } catch (err) {
+      onSetTyping(false);
+      onAddBotMsg('Failed to prepare the offer PDF. Please try again.');
+      console.error(err);
+    }
+  };
+
+  // ── Step 2: Actually send after HR confirms/edits in the modal ──
+  const handleConfirmSendOffer = async () => {
+    setShowEmailModal(false);
+    onSetTyping(true);
+
+    try {
+      const emailHtml = `<div style="font-family: Arial, sans-serif; color: #374151; max-width: 600px; white-space: pre-wrap;">${emailBody}</div>`;
+
       const emailRes = await fetch(import.meta.env.VITE_SEND_EMAIL_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: 'pukakade2018@gmail.com', 
-          subject: `Offer Letter — ${draft.designation || jdTitle} at Atgeir Solutions`,
+          to: 'mutkureu@gmail.com',
+          subject: emailSubject,
           body: emailHtml,
           attachments: [
             {
               filename: `Offer_Letter_${firstName}.pdf`,
-              content: base64Data,
+              content: pendingPdfBase64,
               encoding: 'base64'
             }
           ]
         })
       });
 
-      if (!emailRes.ok) throw new Error("Email backend failed to send.");
+      if (!emailRes.ok) throw new Error('Email backend failed to send.');
 
       // 6. Save the offer to BigQuery (now includes salaryRules)
       // 6. Save the offer to BigQuery (now includes salaryRules)
@@ -764,7 +825,7 @@ function OfferChatPanel({
         <style>{bounceCss}</style>
         {showGenerateChoiceModal && (
           <GenerateChoiceModal
-            onContinue={() => { setShowGenerateChoiceModal(false); handleSendOffer(); }}
+            onContinue={() => { setShowGenerateChoiceModal(false); handlePrepareSendOffer(); }}
             onFillSalary={() => { setShowGenerateChoiceModal(false); setShowSalaryModal(true); }}
             onClose={() => setShowGenerateChoiceModal(false)}
           />
@@ -776,12 +837,22 @@ function OfferChatPanel({
             onClose={() => setShowSalaryModal(false)}
           />
         )}
+        {showEmailModal && (
+          <EmailPreviewModal
+            subject={emailSubject}
+            body={emailBody}
+            onSubjectChange={setEmailSubject}
+            onBodyChange={setEmailBody}
+            onConfirm={handleConfirmSendOffer}
+            onClose={() => setShowEmailModal(false)}
+          />
+        )}
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
           <div style={{ width: '50%', borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: '#fff', minWidth: 0 }}>
             <OfferForm draft={draft} onSetDraft={onSetDraft} filledCount={filledCount} totalFields={totalFields} onSubmitForm={handleFormSubmit} />
           </div>
-          <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handleSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
+          <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
       </div>
     </>
   );
@@ -792,7 +863,7 @@ function OfferChatPanel({
       <style>{bounceCss}</style>
       {showGenerateChoiceModal && (
         <GenerateChoiceModal
-          onContinue={() => { setShowGenerateChoiceModal(false); handleSendOffer(); }}
+          onContinue={() => { setShowGenerateChoiceModal(false); handlePrepareSendOffer(); }}
           onFillSalary={() => { setShowGenerateChoiceModal(false); setShowSalaryModal(true); }}
           onClose={() => setShowGenerateChoiceModal(false)}
         />
@@ -802,6 +873,16 @@ function OfferChatPanel({
           rules={salaryRules}
           onChange={setSalaryRules}
           onClose={() => setShowSalaryModal(false)}
+        />
+      )}
+      {showEmailModal && (
+        <EmailPreviewModal
+          subject={emailSubject}
+          body={emailBody}
+          onSubjectChange={setEmailSubject}
+          onBodyChange={setEmailBody}
+          onConfirm={handleConfirmSendOffer}
+          onClose={() => setShowEmailModal(false)}
         />
       )}
       <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
@@ -833,7 +914,7 @@ function OfferChatPanel({
             placeholder="Type here to update document…" 
           />
         </div>
-        <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handleSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
+        <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
       </div>
     </>
   );
@@ -1111,19 +1192,24 @@ function OfferForm({ draft, onSetDraft, filledCount, totalFields, onSubmitForm }
 function PreviewPanel({ 
   draft, cand, jdTitle, safeBreakup, totalMonthly, totalAnnual, 
   firstName, todayStr, filledCount, totalFields, handleSendOffer, templateHtml,
-  signature, setSignature, onOpenGenerateChoice
+  signature, setSignature
 }: {
   draft: OfferDraft; cand: any; jdTitle: string; safeBreakup: SalaryBreakup;
   totalMonthly: number; totalAnnual: number; firstName: string; todayStr: string;
   filledCount: number; totalFields: number; handleSendOffer: () => void;
   templateHtml?: string | null; 
-  signature: { url: string, x: number, y: number } | null;
-  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number } | null>>;
+  signature: { url: string, x: number, y: number, width: number, height: number } | null;
+  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number, width: number, height: number } | null>>;
 }) {
   const handleDownloadPDF = () => {
     const content = document.getElementById('offer-letter-content');
+    if (!content) return;
+
+    const clone = content.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('.no-print').forEach(el => el.remove());
+
     const printWindow = window.open('', '_blank');
-    if (printWindow && content) {
+    if (printWindow) {
       printWindow.document.write(`
         <html>
           <head>
@@ -1134,7 +1220,7 @@ function PreviewPanel({
             </style>
           </head>
           <body>
-            ${content.innerHTML}
+            ${clone.innerHTML}
             <script>setTimeout(() => { window.print(); window.close(); }, 250);</script>
           </body>
         </html>
@@ -1167,19 +1253,96 @@ function PreviewPanel({
           onDrop={(e) => {
             e.preventDefault();
             const rect = e.currentTarget.getBoundingClientRect();
-            // Subtract offset to center the signature on the mouse pointer
-            setSignature(prev => prev ? { ...prev, x: e.clientX - rect.left - 75, y: e.clientY - rect.top - 25 } : null);
+            setSignature(prev => prev ? { ...prev, x: e.clientX - rect.left - prev.width / 2, y: e.clientY - rect.top - prev.height / 2 } : null);
           }}
         >
           {/* THE FLOATING SIGNATURE */}
           {signature && (
-            <img 
-              src={signature.url} 
-              alt="Signature"
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData('text/plain', 'signature')}
-              style={{ position: 'absolute', left: signature.x, top: signature.y, width: 150, zIndex: 50, cursor: 'grab' }}
-            />
+            <div id="signature-wrapper" style={{ position: 'absolute', left: signature.x, top: signature.y, width: signature.width, height: signature.height, zIndex: 50 }}>
+              <img
+                src={signature.url}
+                alt="Signature"
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData('text/plain', 'signature')}
+                style={{ width: '100%', height: '100%', display: 'block', cursor: 'grab', objectFit: 'fill' }}
+              />
+
+              {/* DELETE BUTTON */}
+              <div
+                className="no-print"
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSignature(null); }}
+                style={{
+                  position: 'absolute', top: -10, right: -10, width: 18, height: 18,
+                  borderRadius: '50%', background: '#EF4444', border: '2px solid #fff',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: 1, userSelect: 'none',
+                }}
+                title="Remove signature"
+              >
+                ×
+              </div>
+
+              {/* RIGHT EDGE — horizontal resize */}
+              <div
+                className="no-print"
+                onMouseDown={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  const startX = e.clientX;
+                  const startWidth = signature.width;
+                  const onMove = (me: MouseEvent) => {
+                    const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
+                    setSignature(prev => prev ? { ...prev, width: newWidth } : null);
+                  };
+                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                }}
+                style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)', width: 8, height: 24, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ew-resize' }}
+                title="Drag to resize width"
+              />
+
+              {/* BOTTOM EDGE — vertical resize */}
+              <div
+                className="no-print"
+                onMouseDown={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  const startY = e.clientY;
+                  const startHeight = signature.height;
+                  const onMove = (me: MouseEvent) => {
+                    const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
+                    setSignature(prev => prev ? { ...prev, height: newHeight } : null);
+                  };
+                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                }}
+                style={{ position: 'absolute', bottom: -4, left: '50%', transform: 'translateX(-50%)', width: 24, height: 8, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ns-resize' }}
+                title="Drag to resize height"
+              />
+
+              {/* CORNER — diagonal resize (both) */}
+              <div
+                className="no-print"
+                onMouseDown={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  const startX = e.clientX;
+                  const startY = e.clientY;
+                  const startWidth = signature.width;
+                  const startHeight = signature.height;
+                  const onMove = (me: MouseEvent) => {
+                    const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
+                    const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
+                    setSignature(prev => prev ? { ...prev, width: newWidth, height: newHeight } : null);
+                  };
+                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+                }}
+                style={{ position: 'absolute', right: -6, bottom: -6, width: 12, height: 12, borderRadius: '50%', background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'nwse-resize' }}
+                title="Drag to resize"
+              />
+            </div>
           )}
 
           {/* THE DOCUMENT CONTENT */}

@@ -362,6 +362,9 @@ def _process_resume_to_row(
         return row
 
     except Exception as exc:
+        msg = str(exc)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+            raise  # re-raise so process_resume_from_gcs retries via GCS, not dead-letter
         print(f"  ✗ Failed [{file_name}]: {exc}")
         return None
 
@@ -471,7 +474,14 @@ def process_resume_from_gcs(
         rows = list(bq_client.query(query, job_config=job_config).result())
         return rows[0].candidate_id if rows else None
 
-    row = _process_resume_to_row(file_name, bucket_name, job_id)
+    try:
+        row = _process_resume_to_row(file_name, bucket_name, job_id)
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+            raise  # re-raise as generic Exception → GCS retries, NOT dead-letter
+        raise ValueError(f"Processing failed for {file_name}: {e}")
+
     if row is None:
         raise ValueError(f"No extractable text in {file_name}")
 
@@ -480,7 +490,7 @@ def process_resume_from_gcs(
     # inlined as array literals. All text fields use @params.
     emb_literal    = "[" + ", ".join(str(float(x)) for x in (row.get("resume_embedding") or [])) + "]"
     skills_literal = "[" + ", ".join(
-        "'" + str(s).replace("\\", "").replace("'", "''").replace("\n", " ").strip() + "'"
+        "'" + str(s).replace("\\", "").replace("'", "''").replace("\n", " ").replace("`", "").replace('"', "").strip() + "'"
         for s in (row.get("skills") or [])
     ) + "]"
     # INSERT ... WHERE NOT EXISTS is the atomic dedup guard.

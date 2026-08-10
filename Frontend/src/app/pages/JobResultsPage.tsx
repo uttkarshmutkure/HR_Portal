@@ -5,7 +5,7 @@ import DashboardLayout from '../components/layout/DashboardLayout';
 import { useToast } from '../components/ToastContext';
 
 const FONT = 'Inter, sans-serif';
-type TabType = 'TOP5' | 'ALL_PASSED' | 'HUMAN_REVIEW' | 'FAILED' | 'REJECTED';
+type TabType = 'TOP5' | 'ALL_PASSED' | 'HUMAN_REVIEW' | 'FAILED' | 'REJECTED' | 'REFERRED';
 
 const DATA_MANAGER_URL       = import.meta.env.VITE_DATA_MANAGER_URL;
 const UPDATE_STATUS_URL      = import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL;
@@ -376,6 +376,7 @@ export default function JobResultsPage() {
 
   const topCandidates         = (candidates?.top_candidates   ?? []).filter(isNotAdvanced);
   const allPassedCandidates   = (candidates?.all_passed       ?? []).filter(isNotAdvanced);
+  const referredCandidates    = candidates?.all_referred      ?? [];
   const allFailedCandidates   = (candidates?.all_failed       ?? []).filter(isNotAdvanced);
   const humanReviewCandidates = (candidates?.all_human_review ?? []).filter(isNotAdvanced);
   const allRejectedCandidates = candidates?.all_rejected      ?? [];
@@ -384,6 +385,7 @@ export default function JobResultsPage() {
   const passedCount = allPassedCandidates.length;
   const reviewCount = humanReviewCandidates.length;
   const failedCount = allFailedCandidates.length;
+  const referredTabCount = referredCandidates.length;
   
   const allScreenedCandidates = [
     ...(candidates?.all_passed ?? []),
@@ -400,11 +402,13 @@ export default function JobResultsPage() {
     activeTab === 'ALL_PASSED'   ? allPassedCandidates :
     activeTab === 'HUMAN_REVIEW' ? humanReviewCandidates :
     activeTab === 'REJECTED'     ? allRejectedCandidates :
+    activeTab === 'REFERRED'     ? referredCandidates :
     allFailedCandidates;
 
   const TABS = [
     { id: 'TOP5'         as TabType, label: `Top ${topCandidates.length}` },
     { id: 'ALL_PASSED'   as TabType, label: 'All Passed' },
+    { id: 'REFERRED'     as TabType, label: `Referred (${referredTabCount})` },
     { id: 'HUMAN_REVIEW' as TabType, label: 'Human Review' },
     { id: 'FAILED'       as TabType, label: 'Failed' },
     { id: 'REJECTED'     as TabType, label: 'Rejected' },

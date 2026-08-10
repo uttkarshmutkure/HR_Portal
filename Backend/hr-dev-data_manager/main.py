@@ -290,7 +290,7 @@ def handle_candidate_data(request):
             }), 200, headers)
 
         # ── CHECK_PIPELINE_STATUS ──────────────────────────────────────────────
-        elif action == 'CHECK_PIPELINE_STATUS':
+        elif action in ('CHECK_PIPELINE_STATUS', 'GET_JOB_STATUS'):
             job_id = data.get('jobId')
             if not job_id:
                 return (json.dumps({'error': 'Missing jobId'}), 400, headers)
@@ -325,10 +325,11 @@ def handle_candidate_data(request):
                     Interviewer_name,
                     Interviewer_email,
                     `round`,
-                    available_slots,
-                    slot_details_json,
-                    status,
-                    work_mode
+                    day,
+                    start_time,
+                    end_time,
+                    work_mode,
+                    status
                 FROM `{project_id}.{dataset_id}.interviewer_slots`
                 WHERE job_id = @job_id
                 {where_round}
@@ -339,23 +340,27 @@ def handle_candidate_data(request):
                 job_config=bigquery.QueryJobConfig(query_parameters=params)
             ).result())
 
-            interviewers = []
+            # Group flat per-slot rows back into one entry per interviewer
+            interviewers_map = {}
             for row in rows:
-                slot_details = []
-                try:
-                    slot_details = json.loads(row.slot_details_json or "[]")
-                except Exception:
-                    pass
-                interviewers.append({
-                    'id':          row.Interviewer_id,
-                    'name':        row.Interviewer_name,
-                    'email':       row.Interviewer_email,
-                    'round':       row.round,
-                    'slots':       row.available_slots,
-                    'slotDetails': slot_details,
-                    'status':      row.status,
-                    'work_mode':   row.work_mode,
+                key = (row.Interviewer_id, row.round)
+                if key not in interviewers_map:
+                    interviewers_map[key] = {
+                        'id':          row.Interviewer_id,
+                        'name':        row.Interviewer_name,
+                        'email':       row.Interviewer_email,
+                        'round':       row.round,
+                        'work_mode':   row.work_mode,
+                        'slotDetails': [],
+                    }
+                interviewers_map[key]['slotDetails'].append({
+                    'day':        row.day,
+                    'start_time': row.start_time,
+                    'end_time':   row.end_time,
+                    'status':     row.status,
                 })
+
+            interviewers = list(interviewers_map.values())
             return (json.dumps({'success': True, 'interviewers': interviewers}), 200, headers)
 
         # ── GET_CANDIDATES ─────────────────────────────────────────────────────
@@ -427,9 +432,10 @@ def handle_candidate_data(request):
 
             # Filter out rejected candidates from the main AI tabs
             rejected = [c for c in all_candidates if c['candidate_result'] == 'Rejected']
-            passed   = [c for c in all_candidates if c['overall_result'] == 'PASS' and c['candidate_result'] != 'Rejected']
-            review   = [c for c in all_candidates if c['overall_result'] == 'HUMAN_REVIEW' and c['candidate_result'] != 'Rejected']
-            failed   = [c for c in all_candidates if c['overall_result'] not in ('PASS', 'HUMAN_REVIEW') and c['candidate_result'] != 'Rejected']
+            referred = [c for c in all_candidates if c['candidate_result'] == 'Referred']
+            passed   = [c for c in all_candidates if c['overall_result'] == 'PASS' and c['candidate_result'] not in ('Rejected', 'Referred')]
+            review   = [c for c in all_candidates if c['overall_result'] == 'HUMAN_REVIEW' and c['candidate_result'] not in ('Rejected', 'Referred')]
+            failed   = [c for c in all_candidates if c['overall_result'] not in ('PASS', 'HUMAN_REVIEW') and c['candidate_result'] not in ('Rejected', 'Referred')]
             top      = passed[:5]
 
             return (json.dumps({
@@ -439,11 +445,13 @@ def handle_candidate_data(request):
                 'all_human_review': review,
                 'all_failed':       failed,
                 'all_rejected':     rejected,
+                'all_referred':     referred,
                 'total_candidates': len(all_candidates),
                 'passed':           len(passed),
                 'human_review':     len(review),
                 'failed':           len(failed),
                 'rejected':         len(rejected),
+                'referred':         len(referred),
             }), 200, headers)
 
         # ── GET_SHORTLISTED ────────────────────────────────────────────────────
@@ -464,7 +472,7 @@ def handle_candidate_data(request):
                     ai_screening_results
                 FROM `{project_id}.{dataset_id}.candidates`
                 WHERE job_id = @job_id
-                    AND candidate_result IN ('Shortlisted', 'Interview', 'Selected', 'Hired', 'Rejected')
+                    AND candidate_result IN ('Shortlisted', 'Referred', 'Interview', 'Selected', 'Hired', 'Rejected')
             """
             params = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
             rows = list(bq_client.query(
