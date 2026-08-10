@@ -38,10 +38,15 @@ def check_login(request):
         table_id = f"{project_id}.{dataset_id}.users"
 
         query = f"""
-            SELECT user_id, email, name, roles, status
-            FROM `{table_id}`
+            SELECT
+                ANY_VALUE(user_id) AS user_id,
+                email,
+                ANY_VALUE(name) AS name,
+                STRING_AGG(DISTINCT role, ',') AS roles,
+                ANY_VALUE(status) AS status
+            FROM `{table_id}`, UNNEST(SPLIT(roles, ',')) AS role
             WHERE email = @email
-            LIMIT 1
+            GROUP BY email
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
