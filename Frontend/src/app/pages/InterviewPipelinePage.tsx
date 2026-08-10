@@ -9,6 +9,7 @@ import { FeedbackTokenService } from '../../services/feedbackTokenService';
 import { EmailService } from '../../services/emailService';
 import { TopCandidate } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
+import { useAuth } from '../components/AuthContext';
 import { SalaryRules, DEFAULT_SALARY_RULES, GenerateChoiceModal, SalaryDetailsModal } from './OfferGenerationPage';
 
 // ── Shared Interviewer Store ───────────────────────────────────────────────────
@@ -157,9 +158,11 @@ const pipelineCache: Record<string, any[]> = {};
 const roundsCache: Record<string, Record<string, RoundTab>> = {};
 const statusesCache: Record<string, Record<string, [string, string | null]>> = {};
 const profileCache: Record<string, any> = {};
+const interviewersCache: Record<string, Record<string, Record<string, string | null>>> = {};
 
 export default function InterviewPipelinePage() {
   const { showToast } = useToast();
+  const { user, activeRole } = useAuth();
   const { jobId }       = useParams<{ jobId: string }>();
   const location        = useLocation();
   const navigate        = useNavigate();
@@ -196,6 +199,8 @@ export default function InterviewPipelinePage() {
   const [candidateRounds,    setCandidateRounds]    = useState<Record<string, RoundTab>>({});
   // Dual-badge: [primary, secondary|null] per candidate
   const [candidateStatuses,  setCandidateStatuses]  = useState<Record<string, [string, string | null]>>({});
+  // Per-candidate, per-round interviewer email — used to filter visibility for the Interviewer role
+  const [candidateInterviewers, setCandidateInterviewers] = useState<Record<string, Record<string, string | null>>>({});
 
 
   // Only reset detailTab when activeTab changes, not when detailTab itself changes.
@@ -242,15 +247,17 @@ export default function InterviewPipelinePage() {
   useEffect(() => {
     if (!jobId || pipelineCandidates.length === 0) return;
 
-    if (refreshKey === 0 && roundsCache[jobId] && statusesCache[jobId]) {
+    if (refreshKey === 0 && roundsCache[jobId] && statusesCache[jobId] && interviewersCache[jobId]) {
       setCandidateRounds(roundsCache[jobId]);
       setCandidateStatuses(statusesCache[jobId]);
+      setCandidateInterviewers(interviewersCache[jobId]);
       return;
     }
 
     const fetchRounds = async () => {
-      const rounds:   Record<string, RoundTab>              = {};
-      const statuses: Record<string, [string, string|null]> = {};
+      const rounds:       Record<string, RoundTab>                     = {};
+      const statuses:     Record<string, [string, string|null]>        = {};
+      const interviewers: Record<string, Record<string, string|null>>  = {};
 
       await Promise.all(
         pipelineCandidates.map(async (candidate) => {
@@ -273,6 +280,12 @@ export default function InterviewPipelinePage() {
             const hr = timeline.find((t: any) => normStr(t.round) === 'hr');
             const r2 = timeline.find((t: any) => normStr(t.round) === 'technical');
             const r1 = timeline.find((t: any) => normStr(t.round) === 'round1');
+
+            interviewers[candId] = {
+              round1:    r1?.interviewer_email ?? null,
+              technical: r2?.interviewer_email ?? null,
+              hr:        hr?.interviewer_email ?? null,
+            };
 
             const hasFeedback  = (round: string) => feedback.some((fb: any) => normStr(fb.round) === round);
             const hasRejection = (round: string) => feedback.some((fb: any) => normStr(fb.round) === round && normStr(fb.verdict) === 'reject');
@@ -315,12 +328,59 @@ export default function InterviewPipelinePage() {
 
       roundsCache[jobId] = rounds;
       statusesCache[jobId] = statuses;
+      interviewersCache[jobId] = interviewers;
       setCandidateRounds(rounds);
       setCandidateStatuses(statuses);
+      setCandidateInterviewers(interviewers);
     };
 
     fetchRounds();
   }, [jobId, refreshKey, pipelineCandidates]);
+
+  // HR sees everyone. An Interviewer only sees a candidate in a given tab if they
+  // are the assigned interviewer for that round (or, for Hired/Archived, if they
+  // interviewed the candidate in ANY round along the way).
+  const bucketRoundKey: Record<RoundTab, string> = {
+    round1: 'round1', round2: 'technical', hrround: 'hr',
+    onboarding: 'hr', hired: 'hr', archived: 'hr',
+  };
+
+  // ── Feedback visibility cascade ─────────────────────────────────────────
+  // Interviewer sees feedback up to (and including) the highest round they're
+  // assigned to for this candidate. HR sees everything, unfiltered.
+  const ROUND_ORDER: Record<string, number> = { round1: 1, technical: 2, hr: 3 };
+
+  const getVisibleFeedback = (candId: string, allFeedback: any[]): any[] => {
+    if (activeRole !== 'interviewer') return allFeedback;
+    if (!user?.email) return [];
+
+    const perRound = candidateInterviewers[candId];
+    if (!perRound) return [];
+
+    let cutoff = 0;
+    Object.entries(perRound).forEach(([round, email]) => {
+      if (email === user.email) {
+        cutoff = Math.max(cutoff, ROUND_ORDER[round] ?? 0);
+      }
+    });
+    if (cutoff === 0) return []; // not assigned to any round for this candidate
+
+    return allFeedback.filter(fb => (ROUND_ORDER[fb.round] ?? 99) <= cutoff);
+  };  
+
+  const isVisibleToCurrentUser = (candId: string, bucket: RoundTab): boolean => {
+    if (activeRole !== 'interviewer') return true; // HR / no role restriction yet
+    if (!user?.email) return false;
+
+    const perRound = candidateInterviewers[candId];
+    if (!perRound) return false;
+
+    if (bucket === 'hired' || bucket === 'archived') {
+      return Object.values(perRound).some(email => email === user.email);
+    }
+
+    return perRound[bucketRoundKey[bucket]] === user.email;
+  };
 
   const candidatesByRound: Record<RoundTab, TopCandidate[]> = {
     round1: [], round2: [], hrround: [], onboarding: [], hired: [], archived: []
@@ -329,7 +389,9 @@ export default function InterviewPipelinePage() {
   pipelineCandidates.forEach(candidate => {
     const candId = candidate.candidate_id;
     const tab = candidateRounds[candId] ?? 'round1';
-    candidatesByRound[tab].push(candidate);
+    if (isVisibleToCurrentUser(candId, tab)) {
+      candidatesByRound[tab].push(candidate);
+    }
   });
 
   // ── Interview Questions ────────────────────────────────────────────────────
@@ -887,7 +949,9 @@ export default function InterviewPipelinePage() {
       );
     }
 
-    const feedbacks = feedbackData?.feedback ?? [];
+    const feedbacks = selectedCandidate
+      ? getVisibleFeedback(selectedCandidate.candidate_id, feedbackData?.feedback ?? [])
+      : [];
     
     // 1. Resolve current round ID and human-readable label
     const currentRoundId = activeTab === 'round1' ? 'round1' : activeTab === 'round2' ? 'technical' : 'hr';
@@ -986,8 +1050,9 @@ export default function InterviewPipelinePage() {
     const roundLabel     = activeTab === 'round1' ? 'Round 1' : activeTab === 'round2' ? 'Round 2' : 'HR Round';
     const currentRoundId = activeTab === 'round1' ? 'round1'  : activeTab === 'round2' ? 'technical' : 'hr';
 
-    const roundFeedback  = feedbackData?.feedback?.filter((fb: any) => fb.round === currentRoundId) ?? [];
-    const allFeedback    = feedbackData?.feedback ?? [];
+    const visibleFeedback = getVisibleFeedback(cand.candidate_id, feedbackData?.feedback ?? []);
+    const roundFeedback    = visibleFeedback.filter((fb: any) => fb.round === currentRoundId);
+    const allFeedback      = visibleFeedback;
 
     // Derived booleans
     const hasFeedback    = roundFeedback.length > 0;

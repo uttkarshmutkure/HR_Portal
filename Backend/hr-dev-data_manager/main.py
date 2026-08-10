@@ -198,9 +198,9 @@ def handle_candidate_data(request):
             ]
 
             timeline_query = f"""
-                SELECT round, status, confirmed_at
+                SELECT round, status, confirmed_at, interviewer_email
                 FROM (
-                    SELECT round, status, confirmed_at,
+                    SELECT round, status, confirmed_at, interviewer_email,
                            ROW_NUMBER() OVER (PARTITION BY round ORDER BY confirmed_at DESC) AS rn
                     FROM `{project_id}.{dataset_id}.candidate_slot_selections`
                     WHERE job_id = @job_id AND candidate_id = @candidate_id
@@ -211,9 +211,10 @@ def handle_candidate_data(request):
             timeline_rows = bq_client.query(timeline_query, job_config=bigquery.QueryJobConfig(query_parameters=profile_params)).result()
             timeline = [
                 {
-                    'round':        row.round,
-                    'status':       row.status,
-                    'confirmed_at': row.confirmed_at.isoformat() if row.confirmed_at else None,
+                    'round':              row.round,
+                    'status':             row.status,
+                    'confirmed_at':       row.confirmed_at.isoformat() if row.confirmed_at else None,
+                    'interviewer_email':  row.interviewer_email,
                 }
                 for row in timeline_rows
             ]

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router';
 import { ArrowRight, Users, GitMerge, Clock, MessageSquare, Loader2, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
+import { useAuth } from '../components/AuthContext';
 
 const FONT = 'Inter, sans-serif';
 
@@ -178,6 +179,8 @@ const ROUND_LABELS: Record<string, string> = {
   hr:        'HR Round',
 };
 
+const ROUND_ORDER: Record<string, number> = { round1: 1, technical: 2, hr: 3 };
+
 const ROUND_STYLE: Record<string, { bg: string; color: string }> = {
   round1:    { bg: '#FFF7ED', color: '#EA580C' },
   technical: { bg: '#EFF6FF', color: '#2563EB' },
@@ -336,6 +339,7 @@ function StatPill({ value, label, color }: { value: number | string; label: stri
 
 // ── 4. Global Feedback Inbox ───────────────────────────────────────────────────
 export function GlobalFeedbackPage() {
+  const { user, activeRole } = useAuth();
   const [allFeedback, setAllFeedback] = useState<FeedbackItem[]>([]);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState<string | null>(null);
@@ -381,21 +385,39 @@ export function GlobalFeedbackPage() {
                     });
                     if (!res.ok) return;
                     const data = await res.json();
-                    
-                    (data.feedback ?? []).forEach((fb: any) => {
-                      items.push({
-                        job,
-                        candidate:        { candidate_id: cand.candidate_id, name: cand.name, email: cand.email },
-                        round:            fb.round,
-                        rating:           fb.rating           ?? null,
-                        tech_skill:       fb.tech_skill       ?? null,
-                        communication:    fb.communication    ?? null,
-                        notes:            fb.notes            ?? null,
-                        verdict:          fb.verdict          ?? null,
-                        interviewer_name: fb.interviewer_name ?? null,
-                        submitted_at:     fb.submitted_at     ?? null,
+
+                    // ── Feedback visibility cascade for the Interviewer role ──
+                    // HR sees everything. An Interviewer only sees feedback up to
+                    // (and including) the highest round they're assigned to for
+                    // THIS candidate — same rule as the Pipeline page.
+                    let cutoff = Infinity;
+                    if (activeRole === 'interviewer') {
+                      cutoff = 0;
+                      if (user?.email) {
+                        (data.timeline ?? []).forEach((t: any) => {
+                          if (t.interviewer_email === user.email) {
+                            cutoff = Math.max(cutoff, ROUND_ORDER[t.round] ?? 0);
+                          }
+                        });
+                      }
+                    }
+
+                    (data.feedback ?? [])
+                      .filter((fb: any) => (ROUND_ORDER[fb.round] ?? 99) <= cutoff)
+                      .forEach((fb: any) => {
+                        items.push({
+                          job,
+                          candidate:        { candidate_id: cand.candidate_id, name: cand.name, email: cand.email },
+                          round:            fb.round,
+                          rating:           fb.rating           ?? null,
+                          tech_skill:       fb.tech_skill       ?? null,
+                          communication:    fb.communication    ?? null,
+                          notes:            fb.notes            ?? null,
+                          verdict:          fb.verdict          ?? null,
+                          interviewer_name: fb.interviewer_name ?? null,
+                          submitted_at:     fb.submitted_at     ?? null,
+                        });
                       });
-                    });
                   } catch { /* skip */ }
                 })
               );
@@ -418,7 +440,7 @@ export function GlobalFeedbackPage() {
     };
     
     fetchAllFeedback();
-  }, []);
+  }, [activeRole, user?.email]);
 
   const advanced  = allFeedback.filter(f => f.verdict === 'advance').length;
   const rejected  = allFeedback.filter(f => f.verdict === 'reject').length;
