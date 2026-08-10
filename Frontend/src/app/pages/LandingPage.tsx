@@ -268,7 +268,7 @@ function SessionExpiredBanner() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const navigate = useNavigate();
-  const { isAuthenticated, sessionExpired, user, logout } = useAuth();
+  const { isAuthenticated, sessionExpired, user, activeRole, logout } = useAuth();
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [showExpiredBanner, setShowExpiredBanner] = useState(false);
 
@@ -284,7 +284,7 @@ export default function LandingPage() {
   // Not logged in / expired -> go to login (and flash the banner if expired).
   function handleDashboardClick() {
     if (isAuthenticated) {
-      navigate('/dashboard');
+      navigate(activeRole === 'hr' ? '/dashboard' : '/jobs');
       return;
     }
     if (sessionExpired) {
@@ -347,7 +347,7 @@ export default function LandingPage() {
                 boxShadow: '0 12px 32px rgba(0,0,0,0.35)',
               }}>
                 <button
-                  onClick={() => { setShowAccountMenu(false); navigate('/dashboard'); }}
+                  onClick={() => { setShowAccountMenu(false); navigate(activeRole === 'hr' ? '/dashboard' : '/jobs'); }}
                   style={{
                     width: '100%', textAlign: 'left', padding: '10px 14px',
                     background: 'none', border: 'none', color: T.white,
