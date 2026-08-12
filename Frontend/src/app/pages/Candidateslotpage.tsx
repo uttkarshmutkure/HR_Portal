@@ -16,8 +16,8 @@ const toLocalYYYYMMDD = (d: Date) => {
 };
 
 const isExpired = (issuedAtMs: number) => {
-  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-  return Date.now() > issuedAtMs + TWO_DAYS_MS;
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  return Date.now() > issuedAtMs + TWO_HOURS_MS;
 };
 
 export default function CandidateSlotPage() {
@@ -102,7 +102,7 @@ export default function CandidateSlotPage() {
           <h2 style={{ fontSize: 18, color: COLOR_PRIMARY, marginBottom: 8, fontWeight: 700 }}>{error === 'expired' ? 'Link Expired' : 'Invalid Link'}</h2>
           <p style={{ fontSize: 13, color: '#6B7280', lineHeight: 1.6 }}>
             {error === 'expired'
-              ? 'This interview scheduling link has exceeded the 48-hour validity period. Please contact HR.'
+              ? 'This interview scheduling link has exceeded the 2-hour validity period. Please contact HR.'
               : 'This link is malformed or invalid. Please check the email and try again.'}
           </p>
         </div>

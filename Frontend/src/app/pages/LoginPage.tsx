@@ -393,7 +393,7 @@ export default function LoginPage() {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@atgeir.com"
+          placeholder="Email"
           onFocus={e => (e.currentTarget.style.borderColor = T.orange)}
           onBlur={e => (e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)")}
           required

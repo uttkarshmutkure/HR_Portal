@@ -12,3 +12,21 @@ Backend/g-meet/client_secret.json
 
 # Frontend build output
 Frontend/dist/
+
+# Node
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Firebase / misc caches
+.firebase/
+firebase-debug.log
+.cache/
