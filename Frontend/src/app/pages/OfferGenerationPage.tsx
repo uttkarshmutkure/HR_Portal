@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip } from 'lucide-react';
+import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip, Check, Pencil, Download, Mic, Square } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { useToast } from '../components/ToastContext';
 import { TopCandidate } from '../../services/screening';
@@ -91,6 +91,17 @@ type ChatMsg = {
   candidateCards?: CandidateOfferCard[];
 };
 
+// ── NEW: Signature state type — includes a `locked` flag so a saved signature
+// stops being draggable/resizable and its coordinates stay put ──────────────
+interface SignatureState {
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  locked?: boolean;
+}
+
 // ── Shared style tokens ───────────────────────────────────────────────────────
 const ORANGE = '#F07C2D';
 const ORANGE_LIGHT = '#FFF7ED';
@@ -99,6 +110,11 @@ const TEXT_DARK = '#111827';
 const TEXT_MID = '#6B7280';
 const TEXT_LIGHT = '#9CA3AF';
 const BG_SOFT = '#F9FAFB';
+
+// ── NEW: fixed width for the offer-letter render surface. Both the on-screen
+// live preview AND the PDF-generation step measure against this same number,
+// so a signature placed on screen lands in exactly the same spot in the PDF. ──
+const DOC_WIDTH = 700;
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '10px 12px', border: `1px solid ${BORDER}`,
@@ -164,7 +180,7 @@ export default function OfferGenerationPage() {
     return [];
   });
 
-  const [signature, setSignature] = useState<{ url: string, x: number, y: number, width: number, height: number } | null>(null);
+  const [signature, setSignature] = useState<SignatureState | null>(null);
   const [salaryRules, setSalaryRules] = useState<SalaryRules>(() => {
     if (location.state?.salaryRules) return location.state.salaryRules;
     const saved = localStorage.getItem(storageKey);
@@ -229,28 +245,6 @@ export default function OfferGenerationPage() {
   return (
     <DashboardLayout breadcrumb={`Dashboard / Jobs / ${jdTitle} / Pipeline / Generate Offer`}>
       <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', padding: '20px 32px', boxSizing: 'border-box' }}>
-
-        {/* Page Header — back button always visible; title/subtitle hide once chat starts to save space
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: msgs.length === 0 ? 20 : 12, flexShrink: 0 }}>
-          <button
-            onClick={() => navigate(`/jobs/${jobId}/pipeline`, {
-              state: { jdTitle, restoreTab: 'onboarding', restoreCandidateId: candidateId },
-            })}
-            style={{ background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 8, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', color: TEXT_DARK, flexShrink: 0 }}
-          >
-            <ArrowLeft size={16} />
-          </button>
-          {msgs.length === 0 && (
-            <div>
-              <h1 style={{ fontSize: 19, fontWeight: 700, color: TEXT_DARK, margin: 0 }}>
-                Generate Offer — {cand.name}
-              </h1>
-              <div style={{ fontSize: 12, color: TEXT_MID, marginTop: 2 }}>
-                {jdTitle} · {jobId} · Offer Copilot active
-              </div>
-            </div>
-          )}
-        </div> */}
 
         {/* Main Workspace */}
         <div style={{ flex: 1, minHeight: 0, borderRadius: 12, border: `1px solid ${BORDER}`, overflow: 'hidden', display: 'flex' }}>
@@ -317,8 +311,8 @@ interface OfferChatPanelProps {
   setTemplateHtml: (val: string | null) => void;
   customFields: {name: string, description: string}[];
   setCustomFields: (val: {name: string, description: string}[]) => void;
-  signature: { url: string, x: number, y: number, width: number, height: number } | null;
-  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number, width: number, height: number } | null>>;
+  signature: SignatureState | null;
+  setSignature: React.Dispatch<React.SetStateAction<SignatureState | null>>;
   salaryRules: SalaryRules;
   showGenerateChoiceModal: boolean;
   setShowGenerateChoiceModal: (val: boolean) => void;
@@ -435,18 +429,30 @@ function OfferChatPanel({
   };
 
   // ── File Upload Handler ──
+  const MAX_FILE_SIZE_MB = 5;
+  const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // ── NEW: Handle Signature Image Uploads ──
+    // ── Enforce 5MB max file size ──
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      showToast?.(`File too large. Please upload a file under ${MAX_FILE_SIZE_MB}MB.`, 'error');
+      onAddBotMsg(`⚠️ That file is **${(file.size / (1024 * 1024)).toFixed(1)}MB**, which is over the ${MAX_FILE_SIZE_MB}MB limit. Please choose a smaller file.`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // ── Handle Signature Image Uploads ──
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (ev) => {
         if (ev.target?.result) {
-          setSignature({ url: ev.target.result as string, x: 50, y: 50, width: 150, height: 50 });
+          // NEW: signature starts unlocked (draggable/resizable) until the user hits "Save"
+          setSignature({ url: ev.target.result as string, x: 50, y: 50, width: 150, height: 50, locked: false });
           onAddUserMsg(`Uploaded signature: ${file.name}`);
-          onAddBotMsg("Signature uploaded! 👉 You can now drag and drop it anywhere on the live preview document.");
+          onAddBotMsg("Signature uploaded! 👉 Drag it into place on the live preview, resize using the handles, then hit **Save** on the signature toolbar to lock it in before downloading or sending.");
         }
       };
       reader.readAsDataURL(file);
@@ -657,7 +663,9 @@ function OfferChatPanel({
       const clone = contentEl.cloneNode(true) as HTMLElement;
       clone.querySelectorAll('.no-print').forEach(el => el.remove());
 
-      const actualWidth = contentEl.getBoundingClientRect().width || 800;
+      // NEW: the wrapper is now pinned to DOC_WIDTH, so actualWidth is stable
+      // and matches what the user saw when placing the signature.
+      const actualWidth = contentEl.getBoundingClientRect().width || DOC_WIDTH;
       const scaleRatio = 800 / actualWidth;
 
       const sigWrapper = clone.querySelector('#signature-wrapper') as HTMLElement | null;
@@ -770,8 +778,7 @@ function OfferChatPanel({
 
       if (!emailRes.ok) throw new Error('Email backend failed to send.');
 
-      // 6. Save the offer to BigQuery (now includes salaryRules)
-      // 6. Save the offer to BigQuery (now includes salaryRules)
+      // Save the offer to BigQuery (now includes salaryRules)
       const saveRes = await fetch(OFFER_API, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'generate', jobId, candidateId: candId, draft, sendEmail: false, salaryRules }),
@@ -852,7 +859,7 @@ function OfferChatPanel({
           <div style={{ width: '50%', borderRight: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', background: '#fff', minWidth: 0 }}>
             <OfferForm draft={draft} onSetDraft={onSetDraft} filledCount={filledCount} totalFields={totalFields} onSubmitForm={handleFormSubmit} />
           </div>
-          <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
+          <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} showToast={showToast} />
       </div>
     </>
   );
@@ -914,7 +921,7 @@ function OfferChatPanel({
             placeholder="Type here to update document…" 
           />
         </div>
-        <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} />
+        <PreviewPanel draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} filledCount={filledCount} totalFields={totalFields} handleSendOffer={handlePrepareSendOffer} templateHtml={templateHtml} signature={signature} setSignature={setSignature} showToast={showToast} />
       </div>
     </>
   );
@@ -1115,15 +1122,75 @@ function ChatMessages({ msgs, typing, messagesEndRef, jdTitle, jobId, cand, hand
   );
 }
 
+// ── useSpeechToText — wraps the browser Web Speech API ──────────
+function useSpeechToText(onResult: (text: string, isFinal: boolean) => void) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(true);
+  const recognitionRef = useRef<any>(null);
+  const baseTextRef = useRef('');
+
+  const start = (currentText: string) => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setIsSupported(false);
+      return;
+    }
+    baseTextRef.current = currentText ? currentText.trim() + ' ' : '';
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-IN';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event: any) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) final += transcript;
+        else interim += transcript;
+      }
+      if (final) baseTextRef.current += final;
+      onResult((baseTextRef.current + interim).trim(), false);
+    };
+
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
+
+  const stop = () => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  };
+
+  return { isListening, isSupported, start, stop };
+}
+
 // ── ChatInputBar — extracted to top level ──────────
 function ChatInputBar({ input, onSetInput, onSend, onAttach, placeholder = 'Type a message...' }: {
   input: string; onSetInput: (v: string) => void; onSend: () => void; onAttach: () => void; placeholder?: string;
 }) {
+  const { showToast } = useToast();
+  const { isListening, isSupported, start, stop } = useSpeechToText((text) => onSetInput(text));
+
+  const handleMicClick = () => {
+    if (isListening) {
+      stop();
+    } else if (!isSupported) {
+      showToast('Voice input isn\'t supported in this browser. Try Chrome or Edge.');
+    } else {
+      start(input);
+    }
+  };
+
   return (
     <div style={{ padding: '10px 14px', background: '#fff', borderTop: `1px solid ${BORDER}`, flexShrink: 0 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: BG_SOFT, borderRadius: 24, border: `1px solid ${BORDER}`, padding: '4px 6px 4px 14px' }}>
         
-        {/* NEW: Attachment Button */}
+        {/* Attachment Button */}
         <button 
           onClick={onAttach} 
           style={{ background: 'none', border: 'none', color: TEXT_MID, cursor: 'pointer', padding: '0 4px', display: 'flex', alignItems: 'center' }} 
@@ -1132,7 +1199,30 @@ function ChatInputBar({ input, onSetInput, onSend, onAttach, placeholder = 'Type
           <Paperclip size={16} />
         </button>
 
-        <input value={input} onChange={e => onSetInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && onSend()} placeholder={placeholder} style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 13, outline: 'none', color: TEXT_DARK }} />
+        <input value={input} onChange={e => onSetInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && onSend()} placeholder={isListening ? 'Listening…' : placeholder} style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 13, outline: 'none', color: TEXT_DARK }} />
+
+        {/* Mic Button */}
+        <button
+          onClick={handleMicClick}
+          title={isListening ? 'Stop recording' : 'Speak your message'}
+          style={{
+            width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
+            background: isListening ? '#EF4444' : 'transparent',
+            color: isListening ? '#fff' : TEXT_MID,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background 0.15s', flexShrink: 0,
+            animation: isListening ? 'pulse-mic 1.4s ease-in-out infinite' : 'none',
+          }}
+        >
+          {isListening ? <Square size={13} fill="#fff" /> : <Mic size={16} />}
+        </button>
+        <style>{`
+          @keyframes pulse-mic {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.45); }
+            50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+          }
+        `}</style>
+
         <button onClick={onSend} disabled={!input.trim()} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: input.trim() ? ORANGE : '#E5E7EB', cursor: input.trim() ? 'pointer' : 'default', color: '#fff', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s' }}>↑</button>
       </div>
     </div>
@@ -1192,14 +1282,15 @@ function OfferForm({ draft, onSetDraft, filledCount, totalFields, onSubmitForm }
 function PreviewPanel({ 
   draft, cand, jdTitle, safeBreakup, totalMonthly, totalAnnual, 
   firstName, todayStr, filledCount, totalFields, handleSendOffer, templateHtml,
-  signature, setSignature
+  signature, setSignature, showToast
 }: {
   draft: OfferDraft; cand: any; jdTitle: string; safeBreakup: SalaryBreakup;
   totalMonthly: number; totalAnnual: number; firstName: string; todayStr: string;
   filledCount: number; totalFields: number; handleSendOffer: () => void;
   templateHtml?: string | null; 
-  signature: { url: string, x: number, y: number, width: number, height: number } | null;
-  setSignature: React.Dispatch<React.SetStateAction<{ url: string, x: number, y: number, width: number, height: number } | null>>;
+  signature: SignatureState | null;
+  setSignature: React.Dispatch<React.SetStateAction<SignatureState | null>>;
+  showToast?: (msg: string, type?: string) => void;
 }) {
   const handleDownloadPDF = () => {
     const content = document.getElementById('offer-letter-content');
@@ -1208,6 +1299,13 @@ function PreviewPanel({
     const clone = content.cloneNode(true) as HTMLElement;
     clone.querySelectorAll('.no-print').forEach(el => el.remove());
 
+    // ── FIX: the signature is `position: absolute` and relies on
+    // #offer-letter-content's `position: relative` to anchor correctly.
+    // Using clone.innerHTML here drops that wrapper element, so the
+    // absolute-positioned signature loses its anchor and jumps to a
+    // position relative to the print window's viewport instead of the
+    // document — that's the "idhar udhar" shift. clone.outerHTML keeps
+    // the wrapper (and its position/width styles) intact.
     const printWindow = window.open('', '_blank');
     if (printWindow) {
       printWindow.document.write(`
@@ -1216,17 +1314,29 @@ function PreviewPanel({
             <title>Offer_Letter_${firstName}</title>
             <style>
               body { margin: 0; padding: 20px 40px; font-family: Arial, sans-serif; -webkit-print-color-adjust: exact; color-adjust: exact; }
+              #offer-letter-content { position: relative !important; }
               @media print { @page { margin: 0.5cm; } }
             </style>
           </head>
           <body>
-            ${clone.innerHTML}
+            ${clone.outerHTML}
             <script>setTimeout(() => { window.print(); window.close(); }, 250);</script>
           </body>
         </html>
       `);
       printWindow.document.close();
     }
+  };
+
+  // ── NEW: lock the signature's position/size in place ──
+  const handleSaveSignature = () => {
+    setSignature(prev => prev ? { ...prev, locked: true } : null);
+    showToast?.('Signature position saved!', 'success');
+  };
+
+  // ── NEW: unlock so it can be dragged/resized again ──
+  const handleEditSignature = () => {
+    setSignature(prev => prev ? { ...prev, locked: false } : null);
   };
 
   return (
@@ -1248,10 +1358,12 @@ function PreviewPanel({
       <div style={{ flex: 1, overflowY: 'auto', padding: '32px 24px' }}>
         <div 
           id="offer-letter-content" 
-          style={{ position: 'relative' }}
+          style={{ position: 'relative', width: DOC_WIDTH, margin: '0 auto' }}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
+            // NEW: locked signatures can't be repositioned by dropping
+            if (!signature || signature.locked) return;
             const rect = e.currentTarget.getBoundingClientRect();
             setSignature(prev => prev ? { ...prev, x: e.clientX - rect.left - prev.width / 2, y: e.clientY - rect.top - prev.height / 2 } : null);
           }}
@@ -1259,15 +1371,53 @@ function PreviewPanel({
           {/* THE FLOATING SIGNATURE */}
           {signature && (
             <div id="signature-wrapper" style={{ position: 'absolute', left: signature.x, top: signature.y, width: signature.width, height: signature.height, zIndex: 50 }}>
+
+              {/* NEW: Save / Edit / Download toolbar, shown just above the signature */}
+              <div
+                className="no-print"
+                style={{
+                  position: 'absolute', top: -32, left: 0, display: 'flex', gap: 6,
+                  whiteSpace: 'nowrap', zIndex: 60,
+                }}
+              >
+                {!signature.locked ? (
+                  <button
+                    onClick={handleSaveSignature}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 9px', borderRadius: 6, border: 'none', background: '#10B981', color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+                    title="Lock this position"
+                  >
+                    <Check size={11} /> Save
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleEditSignature}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 9px', borderRadius: 6, border: `1px solid ${BORDER}`, background: '#fff', color: TEXT_DARK, fontSize: 11, fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.1)' }}
+                    title="Unlock to reposition"
+                  >
+                    <Pencil size={11} /> Edit
+                  </button>
+                )}
+                <button
+                  onClick={handleDownloadPDF}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 9px', borderRadius: 6, border: 'none', background: ORANGE, color: '#fff', fontSize: 11, fontWeight: 600, cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }}
+                  title="Download PDF now"
+                >
+                  <Download size={11} /> Download
+                </button>
+              </div>
+
               <img
                 src={signature.url}
                 alt="Signature"
-                draggable
-                onDragStart={(e) => e.dataTransfer.setData('text/plain', 'signature')}
-                style={{ width: '100%', height: '100%', display: 'block', cursor: 'grab', objectFit: 'fill' }}
+                draggable={!signature.locked}
+                onDragStart={(e) => {
+                  if (signature.locked) { e.preventDefault(); return; }
+                  e.dataTransfer.setData('text/plain', 'signature');
+                }}
+                style={{ width: '100%', height: '100%', display: 'block', cursor: signature.locked ? 'default' : 'grab', objectFit: 'fill' }}
               />
 
-              {/* DELETE BUTTON */}
+              {/* DELETE BUTTON — always available */}
               <div
                 className="no-print"
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSignature(null); }}
@@ -1283,65 +1433,70 @@ function PreviewPanel({
                 ×
               </div>
 
-              {/* RIGHT EDGE — horizontal resize */}
-              <div
-                className="no-print"
-                onMouseDown={(e) => {
-                  e.preventDefault(); e.stopPropagation();
-                  const startX = e.clientX;
-                  const startWidth = signature.width;
-                  const onMove = (me: MouseEvent) => {
-                    const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
-                    setSignature(prev => prev ? { ...prev, width: newWidth } : null);
-                  };
-                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                  document.addEventListener('mousemove', onMove);
-                  document.addEventListener('mouseup', onUp);
-                }}
-                style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)', width: 8, height: 24, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ew-resize' }}
-                title="Drag to resize width"
-              />
+              {/* Resize/drag handles — hidden once the signature is locked/saved */}
+              {!signature.locked && (
+                <>
+                  {/* RIGHT EDGE — horizontal resize */}
+                  <div
+                    className="no-print"
+                    onMouseDown={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      const startX = e.clientX;
+                      const startWidth = signature.width;
+                      const onMove = (me: MouseEvent) => {
+                        const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
+                        setSignature(prev => prev ? { ...prev, width: newWidth } : null);
+                      };
+                      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                      document.addEventListener('mousemove', onMove);
+                      document.addEventListener('mouseup', onUp);
+                    }}
+                    style={{ position: 'absolute', right: -4, top: '50%', transform: 'translateY(-50%)', width: 8, height: 24, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ew-resize' }}
+                    title="Drag to resize width"
+                  />
 
-              {/* BOTTOM EDGE — vertical resize */}
-              <div
-                className="no-print"
-                onMouseDown={(e) => {
-                  e.preventDefault(); e.stopPropagation();
-                  const startY = e.clientY;
-                  const startHeight = signature.height;
-                  const onMove = (me: MouseEvent) => {
-                    const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
-                    setSignature(prev => prev ? { ...prev, height: newHeight } : null);
-                  };
-                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                  document.addEventListener('mousemove', onMove);
-                  document.addEventListener('mouseup', onUp);
-                }}
-                style={{ position: 'absolute', bottom: -4, left: '50%', transform: 'translateX(-50%)', width: 24, height: 8, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ns-resize' }}
-                title="Drag to resize height"
-              />
+                  {/* BOTTOM EDGE — vertical resize */}
+                  <div
+                    className="no-print"
+                    onMouseDown={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      const startY = e.clientY;
+                      const startHeight = signature.height;
+                      const onMove = (me: MouseEvent) => {
+                        const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
+                        setSignature(prev => prev ? { ...prev, height: newHeight } : null);
+                      };
+                      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                      document.addEventListener('mousemove', onMove);
+                      document.addEventListener('mouseup', onUp);
+                    }}
+                    style={{ position: 'absolute', bottom: -4, left: '50%', transform: 'translateX(-50%)', width: 24, height: 8, borderRadius: 4, background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'ns-resize' }}
+                    title="Drag to resize height"
+                  />
 
-              {/* CORNER — diagonal resize (both) */}
-              <div
-                className="no-print"
-                onMouseDown={(e) => {
-                  e.preventDefault(); e.stopPropagation();
-                  const startX = e.clientX;
-                  const startY = e.clientY;
-                  const startWidth = signature.width;
-                  const startHeight = signature.height;
-                  const onMove = (me: MouseEvent) => {
-                    const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
-                    const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
-                    setSignature(prev => prev ? { ...prev, width: newWidth, height: newHeight } : null);
-                  };
-                  const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-                  document.addEventListener('mousemove', onMove);
-                  document.addEventListener('mouseup', onUp);
-                }}
-                style={{ position: 'absolute', right: -6, bottom: -6, width: 12, height: 12, borderRadius: '50%', background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'nwse-resize' }}
-                title="Drag to resize"
-              />
+                  {/* CORNER — diagonal resize (both) */}
+                  <div
+                    className="no-print"
+                    onMouseDown={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      const startX = e.clientX;
+                      const startY = e.clientY;
+                      const startWidth = signature.width;
+                      const startHeight = signature.height;
+                      const onMove = (me: MouseEvent) => {
+                        const newWidth = Math.min(500, Math.max(40, startWidth + (me.clientX - startX)));
+                        const newHeight = Math.min(500, Math.max(20, startHeight + (me.clientY - startY)));
+                        setSignature(prev => prev ? { ...prev, width: newWidth, height: newHeight } : null);
+                      };
+                      const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+                      document.addEventListener('mousemove', onMove);
+                      document.addEventListener('mouseup', onUp);
+                    }}
+                    style={{ position: 'absolute', right: -6, bottom: -6, width: 12, height: 12, borderRadius: '50%', background: ORANGE, border: '2px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.3)', cursor: 'nwse-resize' }}
+                    title="Drag to resize"
+                  />
+                </>
+              )}
             </div>
           )}
 
