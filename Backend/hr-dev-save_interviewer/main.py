@@ -118,6 +118,34 @@ def save_interviewer_slots(request):
             bq_client.query(delete_query, job_config=del_config).result()
             return ({"success": True, "message": "Interviewer deleted successfully"}, 200, headers)
 
+        # ── DELETE_SLOT action: remove a single slot row ──
+        if request_json.get("action") == "DELETE_SLOT":
+            slot = request_json.get("slot", {})
+            if not all([slot.get("day"), slot.get("start_time"), slot.get("end_time")]):
+                return ({"error": "Missing slot day/start_time/end_time"}, 400, headers)
+
+            del_slot_query = f"""
+                DELETE FROM `{table_id}`
+                WHERE Interviewer_id = @Interviewer_id
+                  AND job_id = @job_id
+                  AND `round` = @round
+                  AND day = @day
+                  AND start_time = @start_time
+                  AND end_time = @end_time
+            """
+            del_slot_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("Interviewer_id", "STRING", interviewer_id),
+                    bigquery.ScalarQueryParameter("job_id",         "STRING", job_id),
+                    bigquery.ScalarQueryParameter("round",          "STRING", interview_round),
+                    bigquery.ScalarQueryParameter("day",            "STRING", slot["day"]),
+                    bigquery.ScalarQueryParameter("start_time",     "STRING", slot["start_time"]),
+                    bigquery.ScalarQueryParameter("end_time",       "STRING", slot["end_time"]),
+                ]
+            )
+            bq_client.query(del_slot_query, job_config=del_slot_config).result()
+            return ({"success": True, "message": "Slot removed successfully"}, 200, headers)
+        
         raw_slots = interviewer.get("slots", "")
         slot_details = parse_day_slots(raw_slots)
         flat_slots = flatten_slots(slot_details)
@@ -154,18 +182,19 @@ def save_interviewer_slots(request):
                 UPDATE SET
                     Interviewer_name  = @Interviewer_name,
                     Interviewer_email = @Interviewer_email,
+                    role              = @role,
                     work_mode         = S.work_mode
                     -- NOTE: status intentionally NOT overwritten here so an
                     -- already-booked slot stays booked on resubmission.
             WHEN NOT MATCHED THEN
                 INSERT (
                     slot_id, Interviewer_id, job_id,
-                    Interviewer_name, Interviewer_email, `round`,
+                    Interviewer_name, Interviewer_email, role, `round`,
                     day, start_time, end_time, work_mode, status, created_at
                 )
                 VALUES (
                     S.slot_id, @Interviewer_id, @job_id,
-                    @Interviewer_name, @Interviewer_email, @round,
+                    @Interviewer_name, @Interviewer_email, @role, @round,
                     S.day, S.start_time, S.end_time, S.work_mode, 'free', CURRENT_TIMESTAMP()
                 )
         """
@@ -177,6 +206,7 @@ def save_interviewer_slots(request):
                 bigquery.ScalarQueryParameter("round",             "STRING", interview_round),
                 bigquery.ScalarQueryParameter("Interviewer_name",  "STRING", interviewer.get("name")),
                 bigquery.ScalarQueryParameter("Interviewer_email", "STRING", interviewer.get("email")),
+                bigquery.ScalarQueryParameter("role", "STRING", interviewer.get("role")),
                 bigquery.ArrayQueryParameter("new_slots", "STRUCT", new_rows_struct),
             ]
         )

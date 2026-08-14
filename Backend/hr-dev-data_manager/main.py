@@ -325,6 +325,7 @@ def handle_candidate_data(request):
                     Interviewer_name,
                     Interviewer_email,
                     `round`,
+                    role,
                     day,
                     start_time,
                     end_time,
@@ -349,6 +350,7 @@ def handle_candidate_data(request):
                         'id':          row.Interviewer_id,
                         'name':        row.Interviewer_name,
                         'email':       row.Interviewer_email,
+                        'role':        row.role,          
                         'round':       row.round,
                         'work_mode':   row.work_mode,
                         'slotDetails': [],
@@ -358,10 +360,12 @@ def handle_candidate_data(request):
                     'start_time': row.start_time,
                     'end_time':   row.end_time,
                     'status':     row.status,
+                    'work_mode':  row.work_mode,
                 })
 
             interviewers = list(interviewers_map.values())
             return (json.dumps({'success': True, 'interviewers': interviewers}), 200, headers)
+        
 
         # ── GET_CANDIDATES ─────────────────────────────────────────────────────
         # Called by JobResultsPage to load all screening results from BQ.

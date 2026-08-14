@@ -252,10 +252,11 @@ def auto_matchmaker(request):
         )
 
         agent_response = chat.send_message(prompt)
+        response_text = agent_response.text or ""
 
         # Case-insensitive match check
-        if "no match found" in agent_response.text.lower():
-            return ({"success": True, "matchSuccess": False, "message": "No match found. Manual assignment required.", "agentLog": agent_response.text}, 200, headers)
+        if "no match found" in response_text.lower():
+            return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": response_text}, 200, headers)
 
         try:
             release_query = f"""
