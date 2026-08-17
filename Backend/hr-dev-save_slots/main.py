@@ -251,7 +251,7 @@ def save_candidate_slots(request):
         }
 
         try:
-            match_res  = requests.post(matchmaker_url, json=trigger_payload, timeout=25)
+            match_res  = requests.post(matchmaker_url, json=trigger_payload, timeout=110)
             match_data = match_res.json()
 
             if match_res.status_code == 200 and match_data.get('success'):
