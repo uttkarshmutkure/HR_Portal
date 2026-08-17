@@ -253,6 +253,8 @@ def auto_matchmaker(request):
 
         agent_response = chat.send_message(prompt)
         response_text = agent_response.text or ""
+        print(f"[MATCHMAKER] Agent response text: {response_text!r}")
+        print(f"[MATCHMAKER] Finish reason: {agent_response.candidates[0].finish_reason if agent_response.candidates else 'N/A'}")
 
         # Case-insensitive match check
         if "no match found" in response_text.lower():

@@ -141,23 +141,23 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
   inv: any;
   onEdit: (inv: any) => void;
   onDelete: (id: string) => void;
-  onRemoveSlot: (invId: string, slotIndex: number) => void;
+  onRemoveSlot: (invId: string, slot: { day: string; start_time: string; end_time: string }) => void;
 }) {
   const [showSlots, setShowSlots] = useState(false);
 
   // New backend shape: inv.slotDetails is a flat array of { day, start_time, end_time, status }
-  const flatSlots: { day: string; start_time: string; end_time: string; status: string }[] = inv.slotDetails || [];
+  const flatSlots: { day: string; start_time: string; end_time: string; status: string; work_mode?: string }[] = inv.slotDetails || [];
 
   // Group flat slots back into day buckets for display (same shape the UI expects downstream)
-  const daySlotsMap: Record<string, { start: string; end: string }[]> = {};
+  const daySlotsMap: Record<string, { timeRanges: { start: string; end: string }[]; workMode: 'WFO' | 'WFH' }> = {};
   flatSlots.forEach(s => {
-    if (!daySlotsMap[s.day]) daySlotsMap[s.day] = [];
-    daySlotsMap[s.day].push({ start: s.start_time, end: s.end_time });
+    if (!daySlotsMap[s.day]) daySlotsMap[s.day] = { timeRanges: [], workMode: (s.work_mode as 'WFO' | 'WFH') || 'WFO' };
+    daySlotsMap[s.day].timeRanges.push({ start: s.start_time, end: s.end_time });
   });
-  const daySlots: DaySlot[] = Object.entries(daySlotsMap).map(([day, timeRanges]) => ({
+  const daySlots: DaySlot[] = Object.entries(daySlotsMap).map(([day, data]) => ({
     day,
-    workMode: (inv.work_mode as 'WFO' | 'WFH') || 'WFO',
-    timeRanges,
+    workMode: data.workMode,
+    timeRanges: data.timeRanges,
   }));
 
   const slotCount = flatSlots.length;
@@ -233,6 +233,13 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
                     <Clock size={11} style={{ color: T.orange, flexShrink: 0 }} />
                     <span style={{ fontSize: '11px', color: T.textSub, fontFamily: FONT }}>{formatTime12(tr.start)} – {formatTime12(tr.end)}</span>
                   </div>
+                  <button
+                    onClick={() => onRemoveSlot(inv.id, { day: ds.day, start_time: tr.start, end_time: tr.end })}
+                    title="Delete this slot"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.red, display: 'flex', padding: '2px' }}
+                  >
+                    <Trash size={12} />
+                  </button>
                 </div>
               ))}
             </div>
@@ -589,31 +596,24 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     }
   };
 
-  const handleRemoveSlotFromCard = async (invId: string, slotIndex: number) => {
+  const handleRemoveSlotFromCard = async (invId: string, slot: { day: string; start_time: string; end_time: string }) => {
     const inv = interviewers.find((i: any) => i.id === invId);
     if (!inv) return;
-    const rawSlots = getRawSlotsArray(inv.slots);
-    const updatedSlots = rawSlots.filter((_, i) => i !== slotIndex).join(',');
-    const updatedInv = { ...inv, slots: updatedSlots };
-
     try {
-      const payload = { jobId: job.job_id, round: updatedInv.round || 'round1', interviewer: updatedInv };
       await fetch(SAVE_INTERVIEWER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'DELETE_SLOT', jobId: job.job_id, round: inv.round || 'round1', interviewer: inv, slot }),
       });
-
       const slotRefresh = await fetch(DATA_MANAGER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'GET_INTERVIEWERS', jobId: job.job_id }),
       });
       const slotData = await slotRefresh.json();
       if (slotData.success) setInterviewers(slotData.interviewers);
+      showToast('Slot removed', 'success');
     } catch (e) {
-      console.error('Failed to update slot in BigQuery', e);
-      alert('Failed to remove slot from database.');
+      console.error('Failed to remove slot', e);
+      showToast('Failed to remove slot.', 'error');
     }
   };
 
@@ -634,11 +634,20 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
 
     // Initialize day slots — parse existing or empty
     const [daySlots, setDaySlots] = useState<DaySlot[]>(() => {
-      if (editingInv?.slots) {
-        const parsed = deserializeDaySlots(editingInv.slots);
-        return parsed.length > 0 ? parsed : [];
-      }
-      return [];
+      const flat: { day: string; start_time: string; end_time: string; work_mode?: string }[] = editingInv?.slotDetails || [];
+      if (flat.length === 0) return [];
+
+      const byDay: Record<string, { timeRanges: { start: string; end: string }[]; workMode: 'WFO' | 'WFH' }> = {};
+      flat.forEach(s => {
+        if (!byDay[s.day]) byDay[s.day] = { timeRanges: [], workMode: (s.work_mode as 'WFO' | 'WFH') || 'WFO' };
+        byDay[s.day].timeRanges.push({ start: s.start_time, end: s.end_time });
+      });
+
+      return Object.entries(byDay).map(([day, data]) => ({
+        day,
+        workMode: data.workMode,
+        timeRanges: data.timeRanges,
+      }));
     });
 
     const handleSave = async () => {

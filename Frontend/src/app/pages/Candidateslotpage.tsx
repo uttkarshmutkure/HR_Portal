@@ -15,6 +15,27 @@ const toLocalYYYYMMDD = (d: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+const DAY_NAME_TO_INDEX: Record<string, number> = {
+  Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6,
+};
+
+// Returns the date (YYYY-MM-DD) of the next upcoming occurrence of the given day name.
+// If today IS that day, it rolls forward to next week (since "today" slots are excluded
+// by the backend anyway).
+const nextDateForDay = (dayName: string): string => {
+  const targetIdx = DAY_NAME_TO_INDEX[dayName];
+  if (targetIdx === undefined) return toLocalYYYYMMDD(new Date());
+
+  const today = new Date();
+  const todayIdx = today.getDay();
+  let diff = (targetIdx - todayIdx + 7) % 7;
+  if (diff === 0) diff = 7; // if same day, jump to next week
+
+  const result = new Date(today);
+  result.setDate(today.getDate() + diff);
+  return toLocalYYYYMMDD(result);
+};
+
 const isExpired = (issuedAtMs: number) => {
   const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
   return Date.now() > issuedAtMs + TWO_HOURS_MS;
@@ -137,7 +158,7 @@ export default function CandidateSlotPage() {
       candidateEmail: invite.candEmail,
       selectedSlots: selectedSlots.map(slot => ({
         raw: `${slot.day}|${slot.start_time}-${slot.end_time}`,
-        slot_date: activeDateStr,
+        slot_date: nextDateForDay(slot.day),
         slot_start_time: slot.start_time,
         slot_end_time: slot.end_time
       }))
