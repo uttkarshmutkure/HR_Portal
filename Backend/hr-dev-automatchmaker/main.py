@@ -253,12 +253,63 @@ def auto_matchmaker(request):
 
         agent_response = chat.send_message(prompt)
         response_text = agent_response.text or ""
+        finish_reason = str(agent_response.candidates[0].finish_reason) if agent_response.candidates else 'N/A'
         print(f"[MATCHMAKER] Agent response text: {response_text!r}")
-        print(f"[MATCHMAKER] Finish reason: {agent_response.candidates[0].finish_reason if agent_response.candidates else 'N/A'}")
+        print(f"[MATCHMAKER] Finish reason: {finish_reason}")
 
-        # Case-insensitive match check
-        if "no match found" in response_text.lower():
-            return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": response_text}, 200, headers)
+        # ── Ground truth check: did a booking actually happen in BigQuery? ──
+        # Don't trust the agent's text alone — MALFORMED_FUNCTION_CALL or an
+        # empty final turn can both look ambiguous from text/finish_reason.
+        verify_query = f"""
+            SELECT interviewer_id
+            FROM `{project_id}.{dataset_id}.candidate_slot_selections`
+            WHERE job_id = @job_id AND candidate_id = @candidate_id AND round = @round
+            ORDER BY confirmed_at DESC
+            LIMIT 1
+        """
+        verify_rows = list(bq_client.query(verify_query, job_config=bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
+                bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+            ]
+        )))
+        booking_confirmed = bool(verify_rows and verify_rows[0].interviewer_id)
+        print(f"[MATCHMAKER] Booking confirmed in DB: {booking_confirmed}")
+
+        if not booking_confirmed:
+            # Retry once — MALFORMED_FUNCTION_CALL can corrupt the chat's internal
+            # history (mismatched function-call/response turns), so re-nudging the
+            # same chat object is unreliable. Start a completely fresh chat with
+            # the full original prompt instead.
+            if 'STOP' not in finish_reason:
+                print("[MATCHMAKER] Retrying once with a fresh chat session due to non-STOP finish_reason with no booking...")
+                retry_chat = ai_client.chats.create(
+                    model="gemini-2.5-flash",
+                    config=types.GenerateContentConfig(
+                        system_instruction=agent_instructions,
+                        tools=[book_interview_in_db, create_meet_link, generate_feedback_link, generate_candidate_review_link, send_email_tool],
+                        temperature=0.1
+                    )
+                )
+                agent_response = retry_chat.send_message(prompt)
+                response_text = agent_response.text or ""
+                finish_reason = str(agent_response.candidates[0].finish_reason) if agent_response.candidates else 'N/A'
+                print(f"[MATCHMAKER] Retry response text: {response_text!r}")
+                print(f"[MATCHMAKER] Retry finish reason: {finish_reason}")
+
+                verify_rows = list(bq_client.query(verify_query, job_config=bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                        bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
+                        bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                    ]
+                )))
+                booking_confirmed = bool(verify_rows and verify_rows[0].interviewer_id)
+                print(f"[MATCHMAKER] Booking confirmed in DB after retry: {booking_confirmed}")
+
+        if not booking_confirmed:
+            return ({"success": True, "matchSuccess": False, "message": "No match found or booking failed. Manual assignment required.", "agentLog": response_text, "finishReason": str(finish_reason)}, 200, headers)
 
         try:
             release_query = f"""
@@ -277,7 +328,7 @@ def auto_matchmaker(request):
         except Exception as release_err:
             print(f"[MATCHMAKER] Failed to release on_hold slots: {release_err}")
 
-        return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": agent_response.text}, 200, headers)
+        return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": response_text}, 200, headers)
 
     except Exception as e:
         print(f"[MATCHMAKER] Error: {e}")

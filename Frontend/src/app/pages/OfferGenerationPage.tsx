@@ -41,11 +41,26 @@ const parseAmount = (s: string | undefined): number => {
 const fmtAmount = (n: number): string =>
   n === 0 ? '' : n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
+export type EmployeeType = 'regular' | 'intern' | 'consultant' | 'custom';
+
+export const EMPLOYEE_TYPE_LABELS: Record<EmployeeType, string> = {
+  regular: 'Regular / Experienced',
+  intern: 'Intern',
+  consultant: 'Consultant (Contract)',
+  custom: 'Custom Format',
+};
+
 interface OfferDraft {
   baseCTC: string; variablePay: string; joiningDate: string;
   location: string; probation: string; reportingManager: string; designation: string;
   candidateAddress: string; candidatePhone: string; breakup: SalaryBreakup;
   customValues: Record<string, string>;
+  employeeType: EmployeeType;
+  internEndDate: string;
+  internStipend: string;
+  consultingFeeMonthly: string;
+  taxPercent: string;
+  contractDuration: string;
 }
 
 const CORE_DRAFT_FIELDS: (keyof OfferDraft)[] = [
@@ -59,6 +74,9 @@ const EMPTY_DRAFT: OfferDraft = {
   designation: '', candidateAddress: '', candidatePhone: '',
   breakup: { ...EMPTY_BREAKUP },
   customValues: {}, 
+  employeeType: 'regular',
+  internEndDate: '', internStipend: '',
+  consultingFeeMonthly: '', taxPercent: '10', contractDuration: '',
 };
 
 export interface SalaryRules {
@@ -144,9 +162,12 @@ export default function OfferGenerationPage() {
   const storageKey = `atgeir_offer_${jobId}_${candidateId}`;
 
   const [draft, setDraft] = useState<OfferDraft>(() => {
-    const saved = localStorage.getItem(storageKey);
+    const saved = sessionStorage.getItem(storageKey);
     if (saved) {
-      try { return JSON.parse(saved).draft || EMPTY_DRAFT; } catch (e) {}
+      try {
+        const parsedDraft = JSON.parse(saved).draft;
+        if (parsedDraft) return { ...EMPTY_DRAFT, ...parsedDraft };
+      } catch (e) {}
     }
     return { 
       ...EMPTY_DRAFT, 
@@ -207,7 +228,7 @@ export default function OfferGenerationPage() {
   // Sync state to local storage whenever it changes
   useEffect(() => {
     if (jobId && candidateId) {
-      localStorage.setItem(storageKey, JSON.stringify({ draft, msgs, templateHtml, customFields, salaryRules }));
+      sessionStorage.setItem(storageKey, JSON.stringify({ draft, msgs, templateHtml, customFields, salaryRules }));
     }
   }, [draft, msgs, templateHtml, customFields, salaryRules, jobId, candidateId, storageKey]);
 
@@ -479,9 +500,9 @@ function OfferChatPanel({
       onSetTyping(false);
       if (data.html) {
         setTemplateHtml(data.html);
-        setCustomFields(data.fields || []);
+        setCustomFields([]);
         setViewMode('chat-preview');
-        onAddBotMsg(`I've processed your template and opened it on the right! I detected ${data.fields?.length || 0} custom fields. Let's start filling them. What is the Designation and Base CTC?`);
+        onAddBotMsg(`Got it — I've opened your offer letter on the right exactly as uploaded. It's ready to send to **${cand.name}** whenever you are.`);
       } else {
         onAddBotMsg("Sorry, I couldn't process that file. Please make sure it's a valid PDF or DOCX.", ['Upload my own format', 'Use default format']);
       }
@@ -497,7 +518,24 @@ function OfferChatPanel({
   const handleOption = async (option: string) => {
     onAddUserMsg(option);
 
-    if (option === 'Use default format') {
+    if (['Regular / Experienced', 'Intern', 'Consultant'].includes(option)) {
+      const typeMap: Record<string, EmployeeType> = {
+        'Regular / Experienced': 'regular',
+        'Intern': 'intern',
+        'Consultant': 'consultant',
+      };
+      onSetDraft({ employeeType: typeMap[option] });
+      setViewMode('chat-preview');
+      onSetTyping(true);
+      setTimeout(() => {
+        onSetTyping(false);
+        const existingOffers = Object.entries(savedOffers).filter(([id]: any) => id !== candId);
+        const nextOptions = ['Fill a form', 'Chat with me', 'Upload my own format'];
+        if (existingOffers.length > 0) nextOptions.push('Copy from another candidate');
+        onAddBotMsg(`Got it — this will be a **${option}** offer. How would you like to fill in the details, or you can upload your own letter format if you'd prefer.`, nextOptions);
+      }, 500);
+    }
+    else if (option === 'Use default format') {
       setTemplateHtml(null);
       setCustomFields([]);
       setViewMode('chat-preview');
@@ -560,6 +598,34 @@ function OfferChatPanel({
         onSetTyping(false);
         onAddBotMsg(`Here are other candidates from this same job (${jobId}) who already have offers. Pick one to copy their details:`, undefined, cards);
       }, 500);
+    }
+    else {
+      // ── Catch-all: any other option text (e.g. the "help" prompt) just
+      // gets sent to the chat agent like a normal typed message ──
+      onSetTyping(true);
+      try {
+        const res = await fetch(OFFER_API, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'chat', jobId, candidateId: candId, message: option,
+            history: msgs.map((m: any) => ({ role: m.role, text: m.text })),
+            currentDraft: draft,
+            customFields: customFields,
+            templateMode: !!templateHtml,
+            salaryRules,
+          }),
+        });
+        const data = await res.json();
+        onSetTyping(false);
+        onAddBotMsg(data.reply ?? 'Sorry, something went wrong.', data.options);
+        if (data.offerUpdate && Object.keys(data.offerUpdate).length > 0) {
+          onMergeOfferUpdate(data.offerUpdate);
+          if (viewMode === 'chat-only') setViewMode('chat-preview');
+        }
+      } catch {
+        onSetTyping(false);
+        onAddBotMsg('Network error. Please try again.');
+      }
     }
   };
 
@@ -653,7 +719,7 @@ function OfferChatPanel({
 
   // ── Step 1: Generate PDF + open the editable email preview modal ──
   const handlePrepareSendOffer = async () => {
-    if (!draft.baseCTC || !draft.joiningDate) return;
+    if (!templateHtml && (!draft.baseCTC || !draft.joiningDate)) return;
     onSetTyping(true);
 
     try {
@@ -927,31 +993,11 @@ function OfferChatPanel({
   );
 }
 
-// ── Dynamic Custom Template Renderer ──────────────────────────────────────────
-function CustomTemplatePreview({ html, draft }: { html: string; draft: OfferDraft }) {
-  const standardValues: Record<string, string> = {
-    'Designation': draft.designation,
-    'Base CTC': draft.baseCTC,
-    'Variable Pay': draft.variablePay,
-    'Joining Date': draft.joiningDate,
-    'Location': draft.location,
-    'Probation': draft.probation,
-    'Reporting Manager': draft.reportingManager,
-    'Candidate Name': '', 
-    'Candidate Phone': draft.candidatePhone,
-    'Candidate Address': draft.candidateAddress,
-  };
-
-  const processedHtml = html.replace(/\{\{\s*([^}]+)\s*\}\}/g, (match, key) => {
-    const k = key.trim();
-    if (standardValues[k]) return standardValues[k];
-    if (draft.customValues && draft.customValues[k]) return draft.customValues[k];
-    return `<span style="color: #D1D5DB; border-bottom: 1px solid #9CA3AF;">&nbsp;&nbsp;${k}&nbsp;&nbsp;</span>`;
-  });
-
+// ── Custom Template Renderer — read-only, shown exactly as HR uploaded it ────
+function CustomTemplatePreview({ html }: { html: string }) {
   return (
     <div style={{ background: '#fff', padding: '56px 64px', maxWidth: 700, margin: '0 auto', boxShadow: '0 4px 24px rgba(0,0,0,0.09)', borderRadius: 2 }}>
-      <div id="offer-letter-content" dangerouslySetInnerHTML={{ __html: processedHtml }} />
+      <div id="offer-letter-content" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }
@@ -964,7 +1010,17 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
   const blank = (w = 120) => (
     <span style={{ display: 'inline-block', borderBottom: '1px solid #9CA3AF', minWidth: w, color: '#D1D5DB' }}>&nbsp;</span>
   );
+  const isIntern = draft.employeeType === 'intern';
+  const isConsultant = draft.employeeType === 'consultant';
 
+  const feeMonthly = parseAmount(draft.consultingFeeMonthly);
+  const taxPct = parseAmount(draft.taxPercent) || 10;
+  const tdsMonthly = Math.round(feeMonthly * taxPct / 100);
+  const netMonthly = feeMonthly - tdsMonthly;
+  const feeAnnual = feeMonthly * 12;
+  const tdsAnnual = tdsMonthly * 12;
+  const netAnnual = netMonthly * 12;
+  
   return (
     <div style={{
       background: '#fff', color: '#1F2937', fontFamily: 'Arial, sans-serif',
@@ -986,14 +1042,49 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
       <div style={{ marginBottom: 24, fontSize: 13 }}>Phone No:&nbsp;{draft.candidatePhone || blank(200)}</div>
       <div style={{ marginBottom: 20, fontSize: 13 }}><strong>Sub: Offer Letter</strong></div>
       <p style={{ margin: '0 0 14px' }}>Dear {firstName || blank(100)},</p>
-      <p style={{ margin: '0 0 14px' }}>We are pleased to offer you the post of <strong>{draft.designation || jdTitle || blank(140)}</strong> based at <strong>{draft.location || blank(100)}</strong>.</p>
-      <p style={{ margin: '0 0 14px' }}>The compensation structure is enclosed for your reference as Annexure.</p>
-      <p style={{ margin: '0 0 14px' }}>Your employment with the Company will be subject to strict adherence to the policies and procedures of the Company.</p>
-      <p style={{ margin: '0 0 14px' }}>You will be on probation for <span style={{ textDecoration: 'underline' }}>{draft.probation || 'six months'}</span>.</p>
-      <p style={{ margin: '0 0 14px' }}>This offer is subject to background verification and medical fitness.</p>
-      <p style={{ margin: '0 0 14px' }}>On acceptance of the terms and conditions as per this offer letter, you will be able to terminate your employment with the Company by giving one (1) month notice to the Company and vice versa. You shall not be eligible to avail leave during the notice period.</p>
+      <p style={{ margin: '0 0 14px' }}>
+        We are pleased to offer you the {isConsultant ? 'engagement' : isIntern ? 'internship' : 'post'} of <strong>{draft.designation || jdTitle || blank(140)}</strong> based at <strong>{draft.location || blank(100)}</strong>.
+      </p>
+      <p style={{ margin: '0 0 14px' }}>
+        {isConsultant
+          ? 'The consulting fee structure is enclosed for your reference as Annexure.'
+          : 'The compensation structure is enclosed for your reference as Annexure.'}
+      </p>
+ 
+      {isConsultant ? (
+        <>
+          <p style={{ margin: '0 0 14px' }}>
+            This is a <strong>contract-based professional engagement</strong> and does not constitute an employer-employee relationship. Accordingly, you will not be eligible for Provident Fund (PF), gratuity, or other statutory employment benefits applicable to regular employees.
+          </p>
+          <p style={{ margin: '0 0 14px' }}>
+            The contract duration is <span style={{ textDecoration: 'underline' }}>{draft.contractDuration || blank(120)}</span>, and may be renewed or extended by mutual written consent of both parties.
+          </p>
+          <p style={{ margin: '0 0 14px' }}>Tax will be deducted at source (TDS) as per applicable law, as detailed in the Annexure.</p>
+          <p style={{ margin: '0 0 14px' }}>This engagement is subject to background verification.</p>
+          <p style={{ margin: '0 0 14px' }}>Either party may terminate this contract by giving one (1) month's written notice, or as otherwise mutually agreed.</p>
+        </>
+      ) : isIntern ? (
+        <>
+          <p style={{ margin: '0 0 14px' }}>
+            This is a <strong>fixed-duration internship</strong> and does not constitute an offer of regular employment. Statutory employment benefits (including Provident Fund) applicable to regular employees do not apply to this internship.
+          </p>
+          <p style={{ margin: '0 0 14px' }}>
+            Your internship period will run through <span style={{ textDecoration: 'underline' }}>{draft.internEndDate || blank(120)}</span>, subject to satisfactory performance.
+          </p>
+          <p style={{ margin: '0 0 14px' }}>This offer is subject to background verification and medical fitness.</p>
+          <p style={{ margin: '0 0 14px' }}>Either party may end the internship early by giving two (2) weeks' written notice.</p>
+        </>
+      ) : (
+        <>
+          <p style={{ margin: '0 0 14px' }}>Your employment with the Company will be subject to strict adherence to the policies and procedures of the Company.</p>
+          <p style={{ margin: '0 0 14px' }}>You will be on probation for <span style={{ textDecoration: 'underline' }}>{draft.probation || 'six months'}</span>.</p>
+          <p style={{ margin: '0 0 14px' }}>This offer is subject to background verification and medical fitness.</p>
+          <p style={{ margin: '0 0 14px' }}>On acceptance of the terms and conditions as per this offer letter, you will be able to terminate your employment with the Company by giving one (1) month notice to the Company and vice versa. You shall not be eligible to avail leave during the notice period.</p>
+        </>
+      )}
+ 
       {draft.reportingManager && <p style={{ margin: '0 0 14px' }}>You will be reporting to <strong>{draft.reportingManager}</strong>.</p>}
-      {draft.variablePay && <p style={{ margin: '0 0 14px' }}>Variable Pay: <strong>{draft.variablePay}</strong></p>}
+      {!isConsultant && !isIntern && draft.variablePay && <p style={{ margin: '0 0 14px' }}>Variable Pay: <strong>{draft.variablePay}</strong></p>}
       <p style={{ margin: '0 0 14px' }}>We welcome you to join the Company and would be happy if you can sign the duplicate copy of this letter in token of your acceptance of the offer of employment with the Company.</p>
       <p style={{ margin: '0 0 14px' }}>If you have any question, please clarify from the undersigned.</p>
       <p style={{ margin: '0 0 14px' }}>With regards,</p>
@@ -1013,35 +1104,88 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
       </div>
       <div style={{ borderTop: '2px solid #1F2937', paddingTop: 32 }}>
         <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, marginBottom: 20, letterSpacing: '0.04em' }}>Annexure</div>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: '#F3F4F6' }}>
-              <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, border: '1px solid #D1D5DB' }}>Components*</th>
-              <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Monthly (INR)</th>
-              <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Annual (INR)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {BREAKUP_ROWS.map((row, i) => (
-              <tr key={row.key} style={{ background: i % 2 === 1 ? '#F9FAFB' : '#fff' }}>
-                <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB' }}>{row.label}</td>
-                <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: safeBreakup[row.key].monthly ? TEXT_DARK : TEXT_LIGHT }}>{safeBreakup[row.key].monthly ? Number(safeBreakup[row.key].monthly).toLocaleString('en-IN') : ''}</td>
-                <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: safeBreakup[row.key].annual ? TEXT_DARK : TEXT_LIGHT }}>{safeBreakup[row.key].annual ? Number(safeBreakup[row.key].annual).toLocaleString('en-IN') : ''}</td>
-              </tr>
-            ))}
-            <tr style={{ background: '#F3F4F6' }}>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>Total</td>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalMonthly ? fmtAmount(totalMonthly) : ''}</td>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalAnnual ? fmtAmount(totalAnnual) : ''}</td>
-            </tr>
-            <tr style={{ background: '#F3F4F6' }}>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>CTC</td>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalMonthly ? fmtAmount(totalMonthly) : (draft.baseCTC || '')}</td>
-              <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalAnnual ? fmtAmount(totalAnnual) : ''}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p style={{ fontSize: 11, color: TEXT_MID, marginTop: 10 }}>* The components can vary depending on the company and the way it would want to structure the salary.</p>
+ 
+        {isConsultant ? (
+          <>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, border: '1px solid #D1D5DB' }}>Particulars</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Monthly (INR)</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Annual (INR)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB' }}>Consulting Fee</td>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: feeMonthly ? TEXT_DARK : TEXT_LIGHT }}>{feeMonthly ? fmtAmount(feeMonthly) : ''}</td>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: feeMonthly ? TEXT_DARK : TEXT_LIGHT }}>{feeMonthly ? fmtAmount(feeAnnual) : ''}</td>
+                </tr>
+                <tr style={{ background: '#F9FAFB' }}>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB' }}>TDS Deducted ({taxPct}%)</td>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: feeMonthly ? TEXT_DARK : TEXT_LIGHT }}>{feeMonthly ? `− ${fmtAmount(tdsMonthly)}` : ''}</td>
+                  <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: feeMonthly ? TEXT_DARK : TEXT_LIGHT }}>{feeMonthly ? `− ${fmtAmount(tdsAnnual)}` : ''}</td>
+                </tr>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>Net Payable</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{feeMonthly ? fmtAmount(netMonthly) : ''}</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{feeMonthly ? fmtAmount(netAnnual) : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: TEXT_MID, marginTop: 10 }}>* This is a professional consulting fee, not a salary. No Provident Fund or other statutory employment benefits apply. TDS is deducted at source as per applicable tax law.</p>
+          </>
+        ) : isIntern ? (
+          <>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, border: '1px solid #D1D5DB' }}>Particulars</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Monthly (INR)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>Monthly Stipend</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{draft.internStipend ? fmtAmount(parseAmount(draft.internStipend)) : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: TEXT_MID, marginTop: 10 }}>* This is a fixed monthly stipend for the duration of the internship. No Provident Fund or other statutory employment benefits apply.</p>
+          </>
+        ) : (
+          <>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, border: '1px solid #D1D5DB' }}>Components*</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Monthly (INR)</th>
+                  <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, border: '1px solid #D1D5DB' }}>Annual (INR)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {BREAKUP_ROWS.map((row, i) => (
+                  <tr key={row.key} style={{ background: i % 2 === 1 ? '#F9FAFB' : '#fff' }}>
+                    <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB' }}>{row.label}</td>
+                    <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: safeBreakup[row.key].monthly ? TEXT_DARK : TEXT_LIGHT }}>{safeBreakup[row.key].monthly ? Number(safeBreakup[row.key].monthly).toLocaleString('en-IN') : ''}</td>
+                    <td style={{ padding: '7px 10px', border: '1px solid #E5E7EB', textAlign: 'right', color: safeBreakup[row.key].annual ? TEXT_DARK : TEXT_LIGHT }}>{safeBreakup[row.key].annual ? Number(safeBreakup[row.key].annual).toLocaleString('en-IN') : ''}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: '#F3F4F6' }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>Total</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalMonthly ? fmtAmount(totalMonthly) : ''}</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalAnnual ? fmtAmount(totalAnnual) : ''}</td>
+                </tr>
+                <tr style={{ background: '#F3F4F6' }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB' }}>CTC</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalMonthly ? fmtAmount(totalMonthly) : (draft.baseCTC || '')}</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 700, border: '1px solid #D1D5DB', textAlign: 'right' }}>{totalAnnual ? fmtAmount(totalAnnual) : ''}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: TEXT_MID, marginTop: 10 }}>* The components can vary depending on the company and the way it would want to structure the salary.</p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1056,27 +1200,50 @@ function ChatMessages({ msgs, typing, messagesEndRef, jdTitle, jobId, cand, hand
   renderBotText: (text: string) => React.ReactNode;
 }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
       {msgs.length === 0 && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: '60px 24px' }}>
-          <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #F07C2D, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#fff', boxShadow: '0 4px 12px rgba(240,124,45,0.3)' }}>✦</div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center', padding: '12px 24px' }}>
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'linear-gradient(135deg, #F07C2D, #EA580C)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#fff', boxShadow: '0 4px 12px rgba(240,124,45,0.3)' }}>✦</div>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: TEXT_DARK, marginBottom: 6 }}>Offer Copilot</div>
-            <div style={{ fontSize: 13, color: TEXT_MID, maxWidth: 300, lineHeight: 1.6 }}>Say hi to start generating an offer letter for <strong>{cand.name}</strong>.</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: TEXT_DARK, marginBottom: 3 }}>Offer Copilot</div>
+            <div style={{ fontSize: 12, color: TEXT_MID, maxWidth: 300, lineHeight: 1.4 }}>
+              I'll help you create an offer letter for <strong>{cand.name}</strong>. Say hi, or pick an option below.
+            </div>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7, width: '100%', maxWidth: 380, marginTop: 4 }}>
             {[
-              { icon: <FileText size={13} />, label: 'Fill a form' },
-              { icon: <MessageSquare size={13} />, label: 'Chat with me' },
-              { icon: <Copy size={13} />, label: 'Copy from another' },
-              { icon: <Upload size={13} />, label: 'Upload format' },
+              { icon: <MessageSquare size={12} />, label: 'Chat with me', desc: 'Step-by-step here' },
+              { icon: <FileText size={12} />, label: 'Fill a form', desc: 'Structured fields' },
+              { icon: <Upload size={12} />, label: 'Upload a letter', desc: 'Already have one? Send as-is' },
+              { icon: <Copy size={12} />, label: 'Copy a candidate', desc: 'Reuse a similar offer' },
             ].map(hint => (
-              <div key={hint.label} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', background: BG_SOFT, border: `1px solid ${BORDER}`, borderRadius: 20, fontSize: 11, color: TEXT_MID }}>
-                {hint.icon} {hint.label}
+              <div
+                key={hint.label}
+                onClick={() => handleOption(hint.label === 'Upload a letter' ? 'Upload my own format' : hint.label === 'Copy a candidate' ? 'Copy from another candidate' : hint.label)}
+                style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 10px', background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 9, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.15s' }}
+                onMouseOver={(e) => e.currentTarget.style.borderColor = ORANGE}
+                onMouseOut={(e) => e.currentTarget.style.borderColor = BORDER}
+              >
+                <div style={{ color: ORANGE, display: 'flex' }}>{hint.icon}</div>
+                <div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: TEXT_DARK }}>{hint.label}</div>
+                  <div style={{ fontSize: 10, color: TEXT_MID, marginTop: 1 }}>{hint.desc}</div>
+                </div>
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 11, color: TEXT_LIGHT, marginTop: 4 }}>{jdTitle} · {jobId}</div>
+
+          <div
+            onClick={() => handleOption("I'm not sure how to use this — can you walk me through what I can do here?")}
+            style={{ fontSize: 11, color: ORANGE, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2, marginTop: 6 }}
+          >
+            Not sure where to start? Get help
+          </div>
+
+          {jdTitle && jdTitle !== jobId && (
+            <div style={{ fontSize: 10, color: TEXT_LIGHT, marginTop: 1 }}>{jdTitle} · {jobId}</div>
+          )}
         </div>
       )}
 
@@ -1194,7 +1361,7 @@ function ChatInputBar({ input, onSetInput, onSend, onAttach, placeholder = 'Type
         <button 
           onClick={onAttach} 
           style={{ background: 'none', border: 'none', color: TEXT_MID, cursor: 'pointer', padding: '0 4px', display: 'flex', alignItems: 'center' }} 
-          title="Upload document template"
+          title="Upload document template or signature"
         >
           <Paperclip size={16} />
         </button>
@@ -1292,6 +1459,15 @@ function PreviewPanel({
   setSignature: React.Dispatch<React.SetStateAction<SignatureState | null>>;
   showToast?: (msg: string, type?: string) => void;
 }) {
+  // ── Send Offer button: enabled if HR uploaded a custom (ready-made) letter,
+  // OR if the required core fields (Base CTC + Joining Date) are filled in ──
+  let isSendDisabled: boolean;
+  if (templateHtml) {
+    isSendDisabled = false;
+  } else {
+    isSendDisabled = !draft.baseCTC || !draft.joiningDate;
+  }
+
   const handleDownloadPDF = () => {
     const content = document.getElementById('offer-letter-content');
     if (!content) return;
@@ -1350,7 +1526,7 @@ function PreviewPanel({
           <button onClick={handleDownloadPDF} style={{ padding: '7px 14px', borderRadius: 8, border: `1px solid ${BORDER}`, fontSize: 12, fontWeight: 600, cursor: 'pointer', background: '#fff', color: TEXT_DARK, transition: 'background 0.15s', display: 'flex', alignItems: 'center', gap: 6 }} onMouseOver={(e) => e.currentTarget.style.background = '#F9FAFB'} onMouseOut={(e) => e.currentTarget.style.background = '#fff'}>
             Download PDF
           </button>
-          <button onClick={handleSendOffer} disabled={!draft.baseCTC || !draft.joiningDate} style={{ padding: '7px 16px', borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 600, cursor: (!draft.baseCTC || !draft.joiningDate) ? 'default' : 'pointer', background: (!draft.baseCTC || !draft.joiningDate) ? '#E5E7EB' : '#10B981', color: (!draft.baseCTC || !draft.joiningDate) ? '#9CA3AF' : '#fff', transition: 'background 0.15s' }}>
+          <button onClick={handleSendOffer} disabled={isSendDisabled} style={{ padding: '7px 16px', borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 600, cursor: isSendDisabled ? 'default' : 'pointer', background: isSendDisabled ? '#E5E7EB' : '#10B981', color: isSendDisabled ? '#9CA3AF' : '#fff', transition: 'background 0.15s' }}>
             Send Offer to {firstName}
           </button>
         </div>
@@ -1502,7 +1678,7 @@ function PreviewPanel({
 
           {/* THE DOCUMENT CONTENT */}
           {templateHtml ? (
-            <CustomTemplatePreview html={templateHtml} draft={draft} />
+            <CustomTemplatePreview html={templateHtml} />
           ) : (
             <OfferLetterPreview draft={draft} cand={cand} jdTitle={jdTitle} safeBreakup={safeBreakup} totalMonthly={totalMonthly} totalAnnual={totalAnnual} firstName={firstName} todayStr={todayStr} />
           )}

@@ -11,7 +11,6 @@ os.environ["GOOGLE_CLOUD_LOCATION"]     = "asia-south1"
 
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
-
 from google.cloud import bigquery
 import functions_framework
 
@@ -119,33 +118,45 @@ def save_offer_to_db(
     offer_html: str,
     breakup: dict = None,
     salary_rules_json: str = "",
-    status: str = "sent"
+    status: str = "sent",
+    employee_type: str = "regular",
+    intern_end_date: str = "",
+    intern_stipend: str = "",
+    consulting_fee_monthly: str = "",
+    tax_percent: str = "",
+    contract_duration: str = "",
 ) -> str:
     """Save (or overwrite) the offer for this job+candidate, including full salary breakup as JSON."""
     try:
         table = f"{project_id}.{dataset_id}.offer_letters"
         breakup = breakup or {}
-
+ 
         now = datetime.now(timezone.utc).isoformat()
-
+ 
         row = {
-            "job_id":            job_id,
-            "candidate_id":      candidate_id,
-            "candidate_name":    candidate_name,
-            "candidate_email":   candidate_email,
-            "designation":       designation,
-            "base_ctc":          base_ctc,
-            "variable_pay":      variable_pay,
-            "joining_date":      joining_date or None,
-            "work_location":     work_location,
-            "probation":         probation,
-            "reporting_manager": reporting_manager,
-            "offer_html":        offer_html,
-            "salary_breakup":    json.dumps(breakup) if breakup else None,
-            "salary_rules":      salary_rules_json or None,
-            "status":            status,
-            "created_at":        now,
-            "updated_at":        now,
+            "job_id":                job_id,
+            "candidate_id":          candidate_id,
+            "candidate_name":        candidate_name,
+            "candidate_email":       candidate_email,
+            "designation":           designation,
+            "base_ctc":              base_ctc,
+            "variable_pay":          variable_pay,
+            "joining_date":          joining_date or None,
+            "work_location":         work_location,
+            "probation":             probation,
+            "reporting_manager":     reporting_manager,
+            "offer_html":            offer_html,
+            "salary_breakup":        json.dumps(breakup) if breakup else None,
+            "salary_rules":          salary_rules_json or None,
+            "status":                status,
+            "employee_type":         employee_type or "regular",
+            "intern_end_date":       intern_end_date or None,
+            "intern_stipend":        intern_stipend or None,
+            "consulting_fee_monthly": consulting_fee_monthly or None,
+            "tax_percent":           tax_percent or None,
+            "contract_duration":     contract_duration or None,
+            "created_at":            now,
+            "updated_at":            now,
         }
 
         # ── Use MERGE (upsert) keyed on job_id + candidate_id ──
@@ -178,6 +189,7 @@ def save_offer_to_db(
 
         return "Offer saved to database successfully."
     except Exception as e:
+        print(f"[offer_agent] DB save error: {e}")
         return f"DB save error: {str(e)}"
 
 
@@ -192,23 +204,42 @@ def update_offer_draft(
     candidate_phone: str = "",
     candidate_address: str = "",
     breakup: dict = None,
-    custom_values: dict = None
+    custom_values: dict = None,
+    employee_type: str = "",
+    intern_end_date: str = "",
+    intern_stipend: str = "",
+    consulting_fee_monthly: str = "",
+    tax_percent: str = "",
+    contract_duration: str = "",
 ) -> str:
-    """Update the current offer draft with one or more field values extracted from HR's message."""
+    """Update the current offer draft with one or more field values extracted from HR's message.
+ 
+    employee_type must be one of: 'regular', 'intern', 'consultant', 'custom'.
+    - For 'intern': use intern_stipend (flat monthly amount) and intern_end_date. Do NOT fill breakup/PF.
+    - For 'consultant': use consulting_fee_monthly, tax_percent (default 10), and contract_duration. Do NOT fill breakup/PF.
+    - For 'regular': use base_ctc + breakup as usual.
+    """
     updated = {k: v for k, v in {
-        "designation":      designation,
-        "baseCTC":          base_ctc,
-        "variablePay":      variable_pay,
-        "joiningDate":      joining_date,
-        "location":         location,
-        "probation":        probation,
-        "reportingManager": reporting_manager,
-        "candidatePhone":   candidate_phone,
-        "candidateAddress": candidate_address,
-        "breakup":          breakup,
-        "customValues":     custom_values,
+        "designation":          designation,
+        "baseCTC":              base_ctc,
+        "variablePay":          variable_pay,
+        "joiningDate":          joining_date,
+        "location":             location,
+        "probation":            probation,
+        "reportingManager":     reporting_manager,
+        "candidatePhone":       candidate_phone,
+        "candidateAddress":     candidate_address,
+        "breakup":              breakup,
+        "customValues":         custom_values,
+        "employeeType":         employee_type,
+        "internEndDate":        intern_end_date,
+        "internStipend":        intern_stipend,
+        "consultingFeeMonthly": consulting_fee_monthly,
+        "taxPercent":           tax_percent,
+        "contractDuration":     contract_duration,
     }.items() if v}
     return json.dumps(updated)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,10 +334,19 @@ PRIOR OFFERS FOR THIS JOB:
 
 PRE-FILLED BASIC INFO:
 The candidate's name, email, and phone have already been pulled from our database and pre-filled in the offer letter. Do NOT ask HR to provide these — they are already there.
-
+ 
+EMPLOYEE TYPES — ASK THIS EARLY (CRITICAL):
+Before diving into salary numbers, you MUST find out what kind of offer this is, unless CURRENT OFFER DRAFT already has an "employeeType" set. There are four kinds:
+1. **Regular / Experienced** — a normal full-time employee. Uses the standard Basic/HRA/PF/etc. salary breakup.
+2. **Intern** — a fixed-duration internship. Uses a flat monthly stipend (no Basic/HRA/PF breakup, no PF, no probation — instead has an internship end date).
+3. **Consultant** — a contract-based professional engagement, NOT an employee. Uses a flat monthly Consulting Fee with a flat {salary_rules.get('consultantTaxPercent', 10)}% TDS/tax deduction (no PF, no Basic/HRA breakup, no probation — instead has a contract duration).
+4. **Custom** — HR uploads their own template/format; you just fill in whatever fields that template needs (handled separately — do not ask about it unless the user mentions uploading a template).
+ 
+Ask naturally, e.g. "Is this offer for a regular full-time hire, an intern, or a consultant?" Once you know, call update_offer_draft with employee_type set to one of: "regular", "intern", "consultant". Adapt every question after that to match the type (see rules below).
+ 
 COMPENSATION & ANNEXURE MATH RULES:
-When the user provides a total CTC, you MUST auto-calculate the full Salary Breakup (Monthly and Annual values) and pass it via the 'breakup' dictionary in your tool call.
-
+ 
+**If employeeType is "regular"**: When the user provides a total CTC, you MUST auto-calculate the full Salary Breakup (Monthly and Annual values) and pass it via the 'breakup' dictionary in your tool call.
 CALCULATION RULES (Annual) — these come from the HR-configured Salary Panel, use them exactly:
 1. Basic: {salary_rules['basicPercentOfCTC']}% of Total CTC
 2. HRA: {salary_rules['hraPercentOfBasic']}% of Basic
@@ -318,8 +358,7 @@ CALCULATION RULES (Annual) — these come from the HR-configured Salary Panel, u
 8. Special Allowance: The remaining balance! (Total CTC minus all the fields above).
 * Monthly values are exactly Annual / 12.
 
-STRICT JSON BLUEPRINT:
-Your 'breakup' dictionary MUST perfectly match this exact structure and key naming:
+STRICT JSON BLUEPRINT for 'breakup' (regular employees ONLY):
 {{
   "basic": {{ "monthly": "...", "annual": "..." }},
   "hra": {{ "monthly": "...", "annual": "..." }},
@@ -330,13 +369,31 @@ Your 'breakup' dictionary MUST perfectly match this exact structure and key nami
   "pf": {{ "monthly": "...", "annual": "..." }},
   "bonus": {{ "monthly": "0", "annual": "0" }}
 }}
+ 
+**If employeeType is "intern"**: Do NOT ask for CTC or compute a breakup. Just ask for the flat monthly stipend amount and pass it as intern_stipend. Ask for the internship end date (or duration, e.g. "6 months from joining") and pass it as intern_end_date. There is no PF and no probation for interns — never mention PF or probation to the user for an intern offer.
+ 
+**If employeeType is "consultant"**: Do NOT ask for CTC or compute a Basic/HRA/PF breakup. Ask for the flat monthly consulting fee and pass it as consulting_fee_monthly. Ask for the contract duration (e.g. "6 months", "1 year") and pass it as contract_duration. Tax is a flat 10% TDS deduction by default — pass tax_percent as "10" unless HR specifies a different rate. There is no PF and no probation for consultants — never mention PF or probation to the user for a consultant offer. Show the math: Fee minus TDS equals Net Payable, both monthly and annual.
+
+HELP & HOW-TO QUESTIONS (CRITICAL):
+If the HR user asks a "how do I..." / "how does this work" / "I'm stuck" / "help" style question about USING THE TOOL (not about offer content), answer clearly and directly using the facts below. Do NOT call update_offer_draft for these — just explain in plain text.
+
+- **How to fill details**: There are two ways — (1) "Chat with me": just type answers here and I'll fill the offer as we talk, or (2) "Fill a form": click the Form button (top-right of this chat, or the button shown after picking employee type) to get a structured form on the left with a live preview on the right.
+- **How to upload a custom/ready-made letter**: Click the paperclip icon 📎 next to the message box (or the "Upload my own format" button when offered). Choose a PDF or DOCX file that already has all details filled in — it gets converted and shown exactly as uploaded, ready to send with no further editing needed. Max file size is 5MB.
+- **How to switch between employee types (Regular/Intern/Consultant)**: This is decided per-candidate at the very start of the conversation. If you picked the wrong one, just tell me — e.g. "actually this should be a Consultant offer" — and I'll switch and re-ask the relevant questions.
+- **How to add a signature**: Upload an image file (PNG/JPG) of the signature the same way as a template — via the paperclip icon 📎. It appears as a movable, resizable box on the live preview (right side). Drag it into place, resize using the small handles on its edges/corner, then click the green **Save** button on the signature toolbar to lock its position. Click **Edit** afterward if you need to reposition it, or click the small red × to remove it entirely.
+- **How to download or send the offer**: Once the required fields are filled (or a custom letter is uploaded), the **Download PDF** and **Send Offer** buttons become active in the top-right of the live preview panel. Send Offer opens an editable email preview first — you can tweak the subject/message before it actually goes out.
+- **How to copy details from another candidate**: If other candidates in this same job already have offers, a "Copy from another candidate" option appears — click it, then pick whose details to copy in as a starting point (you can still edit anything afterward).
+- **How to change salary calculation rules (Basic %, HRA %, PF %, etc.)**: These are configured in the Salary Panel, reachable from the "Fill Salary Details" option when generating an offer — HR can adjust the percentages/fixed amounts used in every Basic/HRA/PF calculation.
+
+If the question doesn't match any of the above, answer as helpfully as you can based on general knowledge of the flow, and invite them to rephrase if you're not sure what they're asking.
 
 YOUR ROLE:
-- **GREETING THE USER:** If the user says hi or starts the conversation, introduce yourself naturally. Explicitly mention that you have pre-filled {cand_ctx.get('name', 'the candidate')}'s basic information (email and phone). Ask if they want to use the default offer letter format, or upload their own.
-- **FORMAT SWITCHING:** If the user asks to change the format, upload a new format, or switch back to the default format, warmly acknowledge their request and tell them to click the option provided below. NEVER say you lack a user interface or cannot display clickable options. The system automatically renders the buttons for you.
-- **HANDLING FILLING CHOICE:** If the user says they want to "chat to fill the information", acknowledge it and ask what designation and Base CTC they would like to offer to get started.
-- **FORM REVIEW:** If the user asks you to check the form they just filled out, evaluate the CURRENT OFFER DRAFT. If crucial fields like Designation, Base CTC, Joining Date, Location, or Reporting Manager are missing, explicitly tell them what is missing and ask them to provide it here in the chat.
-- **SHOW YOUR MATH (CRITICAL):** Whenever you calculate the salary breakup based on a newly provided Base CTC, you MUST explicitly list the calculated Annual and Monthly breakdown (Basic, HRA, PF, Special Allowance, etc.) directly in your chat response text so the user can verify the math before proceeding.
+- **GREETING THE USER:** If the user says hi or starts the conversation, introduce yourself naturally. Explicitly mention that you have pre-filled {cand_ctx.get('name', 'the candidate')}'s basic information (email and phone). Ask what type of offer this is: Regular, Intern, or Consultant. Also mention that if they already have a ready-made offer letter (e.g. a signed PDF or Word doc), they can upload it directly instead of filling anything in, and it'll be sent to the candidate exactly as-is.
+- **HANDLING FILLING CHOICE:** If the user says they want to "chat to fill the information", acknowledge it and, if employeeType isn't known yet, ask what type of offer this is first; otherwise ask for the fields relevant to that type (see COMPENSATION & ANNEXURE MATH RULES above) to get started.
+- **UPLOAD MENTION (CRITICAL):** After the user tells you the employee type (whether by typing it or clicking a button), briefly remind them in your very next reply that they can also just attach/upload a ready-made offer letter (using the paperclip icon) instead of filling in details, if they'd prefer that route.
+- **FORMAT SWITCHING:** If the user asks to upload their own format/template, warmly acknowledge their request and tell them to click the option provided below. NEVER say you lack a user interface or cannot display clickable options. The system automatically renders the buttons for you.
+- **FORM REVIEW:** If the user asks you to check the form they just filled out, evaluate the CURRENT OFFER DRAFT against the fields relevant to its employeeType. For "regular": Designation, Base CTC, Joining Date, Location, Reporting Manager. For "intern": Designation, Intern Stipend, Joining Date, Intern End Date, Location. For "consultant": Designation, Consulting Fee, Joining Date, Contract Duration, Location. Explicitly tell them what is missing and ask them to provide it here in the chat.
+- **SHOW YOUR MATH (CRITICAL):** Whenever you calculate figures based on newly provided pay info, explicitly list the calculated breakdown (Basic/HRA/PF for regular; Fee/TDS/Net for consultant) directly in your chat response text so the user can verify the math before proceeding.
 - **FORMATTING RULE:** Always use actual line breaks and bullet points when listing questions, options, or salary math so your text is easy to scan.
 - Do NOT add any JSON blocks to your reply text — use the update_offer_draft tool instead.""",
         tools=[update_offer_draft],
@@ -362,14 +419,15 @@ def _build_generate_agent(cand_ctx: dict, job_ctx: dict, draft: dict, send_email
 1. Write a professional, warm offer letter HTML body for the candidate.
 2. Call save_offer_to_db to save it to the database.
 3. If SEND EMAIL is True, call send_email_tool to email the candidate.
-
+ 
 CANDIDATE: {cand_ctx.get('name', 'Candidate')} ({cand_ctx.get('email', '')})
 DESIGNATION: {designation}
+EMPLOYEE TYPE: {draft.get('employeeType', 'regular')}
 OFFER DETAILS: {json.dumps(draft, indent=2)}
 SEND EMAIL: {send_email}
 ACCEPTANCE DEADLINE: {deadline}
 SALARY RULES USED: {json.dumps(salary_rules, indent=2)}
-
+ 
 OFFER LETTER WRITING RULES:
 - Write ONLY the inner HTML body (no <html>/<head>/<body> tags).
 - Use inline styles. Font: Inter/Arial. Accent color: #F07C2D.
@@ -377,6 +435,11 @@ OFFER LETTER WRITING RULES:
   joining instructions, acceptance deadline, warm closing.
 - Compensation table style: border: 1px solid #E5E7EB, alternating #F9FAFB rows.
 - Max ~400 words. Professional but warm tone.
+ 
+EMPLOYEE-TYPE-SPECIFIC WRITING RULES (CRITICAL — follow exactly for EMPLOYEE TYPE above):
+- **regular**: Standard employment letter. Table shows Basic/HRA/PF/etc. from OFFER DETAILS['breakup']. Mention probation period from OFFER DETAILS['probation']. Never mention TDS or "contract".
+- **intern**: This is a fixed-duration internship, NOT regular employment. Do NOT mention PF, probation, or "employee" — say "intern"/"internship" instead. Table shows a single row: Monthly Stipend = OFFER DETAILS['internStipend']. State the internship runs until OFFER DETAILS['internEndDate']. Explicitly note no PF or other statutory employment benefits apply.
+- **consultant**: This is a contract-based professional engagement, NOT employment. Do NOT mention PF, probation, or "employee" — say "consultant"/"engagement"/"contract" instead. Table shows: Consulting Fee (monthly = OFFER DETAILS['consultingFeeMonthly'], annual = monthly×12), TDS Deducted (OFFER DETAILS['taxPercent']]% of fee), Net Payable (fee minus TDS). State the contract duration is OFFER DETAILS['contractDuration']. Explicitly note this does not constitute an employer-employee relationship and no PF or other statutory employment benefits apply.
 
 AFTER writing the offer body HTML, wrap it in this outer email template and call send_email_tool:
 {offer_email_template}
@@ -384,7 +447,7 @@ AFTER writing the offer body HTML, wrap it in this outer email template and call
 Replace OFFER_BODY_PLACEHOLDER with the offer HTML you wrote.
 
 TOOL CALL ORDER:
-1. save_offer_to_db — pass all offer fields + the full wrapped HTML as offer_html + the full breakup dictionary (from OFFER DETAILS above, under the "breakup" key) + salary_rules_json (a JSON string of the SALARY RULES USED shown above)
+1. save_offer_to_db — pass all offer fields + the full wrapped HTML as offer_html + the full breakup dictionary (from OFFER DETAILS above, under the "breakup" key, empty {{}} if not a regular offer) + salary_rules_json (a JSON string of the SALARY RULES USED shown above) + employee_type (from OFFER DETAILS['employeeType'], default "regular") + intern_end_date/intern_stipend (from OFFER DETAILS, if employeeType is "intern") + consulting_fee_monthly/tax_percent/contract_duration (from OFFER DETAILS, if employeeType is "consultant")
 2. send_email_tool — only if SEND EMAIL is True; use subject "Offer Letter — {designation} at Atgeir Solutions"
 """,
         tools=[save_offer_to_db, send_email_tool],
@@ -496,26 +559,23 @@ def _handle_process_template(request, headers: dict):
         client = genai.Client()
 
         prompt = """
-        You are an expert HR Document Engineer and Frontend Developer. I have provided an Offer Letter document.
-        Your task is to convert this document into a perfect, production-ready HTML template.
+        You are an expert HR Document Engineer. I have provided a ready-made, already-filled-in Offer Letter document.
+        Your task is to convert this document into a pixel-faithful HTML copy — a READ-ONLY reproduction to be sent
+        to the candidate exactly as-is. Do NOT create any placeholders or blanks. This is NOT a template to be filled
+        in later; it is a finished document HR has already completed and just wants converted to HTML for sending.
 
         STRICT HTML/CSS RULES:
         1. RECREATE TABLES PERFECTLY: Use properly structured HTML `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, and `<td>` tags. Add inline CSS (`border-collapse: collapse; width: 100%; text-align: left;`) and add `border: 1px solid #E5E7EB; padding: 8px;` to all cells to make the table professional.
-        2. PRESERVE ALIGNMENT & LAYOUT: Use inline CSS for text alignment (e.g., `<div style="text-align: right;">` for dates, `<div style="text-align: center; font-weight: bold;">` for titles). 
+        2. PRESERVE ALIGNMENT & LAYOUT: Use inline CSS for text alignment (e.g., `<div style="text-align: right;">` for dates, `<div style="text-align: center; font-weight: bold;">` for titles).
         3. SPACING & TYPOGRAPHY: Use `<p style="margin-bottom: 16px;">` for paragraphs. Wrap the entire output in a `<div style="font-family: Arial, sans-serif; font-size: 13px; line-height: 1.6; color: #111827;">`.
-        4. LOGOS & IMAGES: If there is a logo placeholder (like "[Insert your logo here]"), DO NOT use an `<img>` tag. It will break the parser. Instead, use a styled div block: `<div style="padding: 16px 24px; background: #F3F4F6; border: 1px dashed #D1D5DB; text-align: center; color: #9CA3AF; font-weight: bold; width: fit-content; border-radius: 4px; margin-bottom: 24px;">[Company Logo Placeholder]</div>`.
+        4. LOGOS & IMAGES: If there is a company logo, DO NOT use an `<img>` tag (it will break the parser). Instead, use a styled div block: `<div style="padding: 16px 24px; background: #F3F4F6; border: 1px dashed #D1D5DB; text-align: center; color: #9CA3AF; font-weight: bold; width: fit-content; border-radius: 4px; margin-bottom: 24px;">[Company Logo]</div>`.
         5. CLEAN UP ARTIFACTS: Completely remove any page numbers, author watermarks, or repetitive footer texts (e.g., "Page 1 of 3").
-        6. MANDATORY PLACEHOLDER FORMAT: You MUST wrap EVERY blank (____), bracketed text ([Name]), or variable field in exact double curly braces. Example: `{{ Designation }}`, `{{ Base CTC }}`. NEVER output a variable name as plain text without the curly braces!
-        7. EXACT MATCH: Standardize common fields to EXACTLY these names inside the braces: Designation, Base CTC, Variable Pay, Joining Date, Location, Probation, Reporting Manager, Candidate Name, Candidate Address, Candidate Phone.
-        8. NO TRUNCATION (CRITICAL): You MUST process and convert the ENTIRE document from the first page to the very last page. Do not summarize, do not cut corners, and do not stop after the first page or section. If the document contains multiple pages, long terms and conditions, or multiple signature blocks, you must include ALL of them in your final HTML output.
+        6. KEEP ALL ACTUAL CONTENT AS-IS: Reproduce every name, number, date, and value exactly as it appears in the source document. Do NOT blank anything out, do NOT invent placeholders, and do NOT use curly braces {{ }} anywhere in the output.
+        7. NO TRUNCATION (CRITICAL): You MUST process and convert the ENTIRE document from the first page to the very last page. Do not summarize, do not cut corners, and do not stop after the first page or section. If the document contains multiple pages, long terms and conditions, or multiple signature blocks, you must include ALL of them in your final HTML output.
 
         Ensure you output valid JSON matching this schema exactly:
         {
-          "html": "<div style='...'>...</div>",
-          "fields": [
-            {"name": "Designation", "description": "The job title"},
-            {"name": "Custom Allowance", "description": "Specific allowance mentioned in template"}
-          ]
+          "html": "<div style='...'>...</div>"
         }
         """
 
@@ -615,12 +675,12 @@ def _handle_chat(body: dict, headers: dict):
                 print(f"[offer_agent] offer_update parse error: {e}")
 
     options = []
-    msg_lower = user_message.lower()
-    
-    # Show options on first message OR if user asks to change format
-    if len(history) == 0 or any(kw in msg_lower for kw in ['upload', 'format', 'template', 'default', 'own']):
-        options = ["Use default format", "Upload my own format"]
 
+    employee_type_known = bool(current_draft.get('employeeType')) or bool(offer_update.get('employeeType'))
+
+    # On the very first message, ask which employee type this offer is for.
+    if len(history) == 0 and not employee_type_known:
+        options = ["Regular / Experienced", "Intern", "Consultant"]
     return (
         json.dumps({
             "reply": result["text"], 
@@ -702,12 +762,13 @@ def _handle_get_offers(body: dict, headers: dict):
     rows = list(bq_client.query(
         f"SELECT candidate_id, candidate_name, designation, base_ctc, variable_pay, "
         f"joining_date, work_location, probation, reporting_manager, status, created_at, "
-        f"salary_breakup, salary_rules "
+        f"salary_breakup, salary_rules, employee_type, intern_end_date, intern_stipend, "
+        f"consulting_fee_monthly, tax_percent, contract_duration "
         f"FROM `{project_id}.{dataset_id}.offer_letters` "
         f"WHERE job_id = '{job_id}' AND status != 'cancelled' "
         f"ORDER BY created_at DESC"
     ))
-
+ 
     offers = [
         {
             "candidateId":   r.candidate_id,
@@ -716,14 +777,20 @@ def _handle_get_offers(body: dict, headers: dict):
             "createdAt":     r.created_at.isoformat() if r.created_at else "",
             "salaryRules":   json.loads(r.salary_rules) if getattr(r, 'salary_rules', None) else None,
             "draft": {
-                "designation":      r.designation       or "",
-                "baseCTC":          r.base_ctc          or "",
-                "variablePay":      r.variable_pay      or "",
-                "joiningDate":      str(r.joining_date) if r.joining_date else "",
-                "location":         r.work_location     or "",
-                "probation":        r.probation         or "",
-                "reportingManager": r.reporting_manager or "",
+                "designation":          r.designation       or "",
+                "baseCTC":              r.base_ctc          or "",
+                "variablePay":          r.variable_pay      or "",
+                "joiningDate":          str(r.joining_date) if r.joining_date else "",
+                "location":             r.work_location     or "",
+                "probation":            r.probation         or "",
+                "reportingManager":     r.reporting_manager or "",
                 "breakup": json.loads(r.salary_breakup) if getattr(r, 'salary_breakup', None) else {},
+                "employeeType":         getattr(r, 'employee_type', None) or "regular",
+                "internEndDate":        getattr(r, 'intern_end_date', None) or "",
+                "internStipend":        getattr(r, 'intern_stipend', None) or "",
+                "consultingFeeMonthly": getattr(r, 'consulting_fee_monthly', None) or "",
+                "taxPercent":           getattr(r, 'tax_percent', None) or "10",
+                "contractDuration":     getattr(r, 'contract_duration', None) or "",
             },
         }
         for r in rows
