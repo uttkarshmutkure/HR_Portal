@@ -169,6 +169,8 @@ def save_candidate_slots(request):
                 update_query = f"""
                     UPDATE `{table_id}`
                     SET
+                        candidate_name    = @candidate_name,
+                        candidate_email   = @candidate_email,
                         slot_selected     = @slot_selected,
                         available_slots   = @available_slots,
                         slot_details_json = @slot_details_json,
@@ -180,6 +182,8 @@ def save_candidate_slots(request):
                     WHERE slot_id = @slot_id
                 """
                 update_cfg = bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter("candidate_name",    "STRING",    request_json.get('candidateName', '')),
+                    bigquery.ScalarQueryParameter("candidate_email",   "STRING",    request_json.get('candidateEmail', '')),
                     bigquery.ScalarQueryParameter("slot_selected",     "STRING",    json.dumps(selected_slots)),
                     bigquery.ScalarQueryParameter("available_slots",   "STRING",    available_slots),
                     bigquery.ScalarQueryParameter("slot_details_json", "STRING",    slot_details_json),
