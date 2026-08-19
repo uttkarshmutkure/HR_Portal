@@ -1726,6 +1726,38 @@ paths:
         '204':
           description: No Content
 
+  # =========================
+  # HR PORTAL - Chat Agent
+  # =========================
+  /hr-portal/chat-agent:
+    post:
+      summary: Answer HR user questions about candidates, jobs, interviews, feedback, and offers via NL-to-SQL over BigQuery
+      operationId: hr-portal-chat-agent-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-chat-agent
+        deadline: 60.0
+      responses:
+        '200':
+          description: Success — chatbot reply returned
+        '400':
+          description: Missing required field (message)
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-portal-chat-agent-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-chat-agent
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+
 
   # TrendCraft Cloud Functions #
   # ---------------- IMAGE GENERATION ----------------

@@ -32,8 +32,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SESSION_KEY = "hiredesk_session";
 const SESSION_DURATION_MS = 1 * 60 * 60 * 1000; // 8 hours
-const CHECK_LOGIN_URL ="https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-check-login"; // TODO: replace with your actual deployed function URL
-
+const CHECK_LOGIN_URL = import.meta.env.VITE_CHECK_LOGIN_URL as string;
 function readSession(): StoredSession | null {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return null;

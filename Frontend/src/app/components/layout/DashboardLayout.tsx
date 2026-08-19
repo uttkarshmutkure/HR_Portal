@@ -1,5 +1,6 @@
 import Sidebar from './Sidebar';
 import TopBar  from './TopBar';
+import HrChatWidget from './HrChatWidget';
 
 interface DashboardLayoutProps {
   children:    React.ReactNode;
@@ -24,6 +25,10 @@ export default function DashboardLayout({ children, breadcrumb }: DashboardLayou
         <TopBar breadcrumb={breadcrumb} />
         <main style={{ flex: 1, overflowX: 'hidden' }}>{children}</main>
       </div>
+
+      <HrChatWidget />
     </div>
   );
 }
+
+
