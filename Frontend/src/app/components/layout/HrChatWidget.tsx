@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { MessageSquare, X, Send, Loader2, Sparkles, Mic, MicOff } from 'lucide-react';
+import { MessageSquare, X, Send, Loader2, Sparkles, Mic, Volume2, VolumeX, Copy, Check } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 
 // ── Design tokens (matched to DashboardPage.tsx) ────────────────────────────
@@ -20,6 +20,17 @@ interface ChatMessage {
   id:     string;
   role:   'user' | 'agent';
   text:   string;
+}
+
+// ── Cross-navigation persistence ─────────────────────────────────────────────
+// Lives outside the component, in plain JS memory — survives DashboardLayout
+// unmounting/remounting on every route change (tab switches), but is wiped
+// automatically on a real page refresh (browser clears JS memory), and
+// explicitly on logout (see the useEffect below).
+let hrChatStore: { open: boolean; messages: ChatMessage[] } = { open: false, messages: [] };
+
+function clearHrChatStore() {
+  hrChatStore = { open: false, messages: [] };
 }
 
 // ── Backend hook point ───────────────────────────────────────────────────────
@@ -52,12 +63,19 @@ function renderFormattedMessage(text: string) {
   });
 }
 
-async function sendMessageToHrAgent(message: string, history: ChatMessage[]): Promise<string> {
+async function sendMessageToHrAgent(
+  message: string,
+  history: ChatMessage[],
+  role: string,
+  email: string
+): Promise<string> {
   const res = await fetch(import.meta.env.VITE_CHAT_AGENT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       message,
+      role,
+      email,
       history: history.map(m => ({ role: m.role, text: m.text })),
     }),
   });
@@ -71,34 +89,69 @@ async function sendMessageToHrAgent(message: string, history: ChatMessage[]): Pr
 }
 
 export default function HrChatWidget() {
-  const { activeRole } = useAuth();
-  const [open, setOpen]         = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { activeRole, user } = useAuth();
+  const [open, setOpen]         = useState(hrChatStore.open);
+  const [messages, setMessages] = useState<ChatMessage[]>(hrChatStore.messages);
   const [input, setInput]       = useState('');
   const [loading, setLoading]   = useState(false);
   const [listening, setListening] = useState(false);
-  const listRef = useRef<HTMLDivElement>(null);
+    const listRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendTextRef = useRef<(text: string, viaVoice?: boolean) => void>();
+    const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text.replace(/\*\*/g, ''));
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 1500);
+    } catch {
+      // Clipboard permission denied or unavailable — fail silently, no crash.
+    }
+  };
 
   // Speech-to-text setup — uses the browser's built-in Web Speech API.
   // No backend involved; unsupported browsers just won't see the mic button.
   const speechSupported = typeof window !== 'undefined' &&
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
+    const listeningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcriptBufferRef = useRef('');
+
+  const MAX_LISTENING_MS = 7000; // safety cap so the mic never listens forever
+
   useEffect(() => {
     if (!speechSupported) return;
     const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const recognition = new SpeechRecognitionCtor();
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    // continuous=true keeps the mic open across pauses instead of stopping
+    // after the very first thing you say — you control when it ends.
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.lang = 'en-IN';
 
     recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setInput(prev => (prev ? prev.trim() + ' ' : '') + transcript);
+      let finalChunk = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalChunk += event.results[i][0].transcript;
+        }
+      }
+      if (finalChunk) {
+        transcriptBufferRef.current = (transcriptBufferRef.current + ' ' + finalChunk).trim();
+        setInput(transcriptBufferRef.current); // shows live transcript as you speak
+      }
     };
     recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      setListening(false);
+      if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
+      const finalText = transcriptBufferRef.current.trim();
+      transcriptBufferRef.current = '';
+      if (finalText) sendTextRef.current?.(finalText, true);
+    };
 
     recognitionRef.current = recognition;
     return () => recognition.stop();
@@ -107,11 +160,18 @@ export default function HrChatWidget() {
   const toggleListening = () => {
     if (!recognitionRef.current) return;
     if (listening) {
-      recognitionRef.current.stop();
+      recognitionRef.current.stop(); // triggers onend -> sends whatever was captured
+      if (listeningTimeoutRef.current) clearTimeout(listeningTimeoutRef.current);
       setListening(false);
     } else {
+      transcriptBufferRef.current = '';
+      setInput('');
       recognitionRef.current.start();
       setListening(true);
+      // Safety auto-stop so a forgotten open mic doesn't listen indefinitely.
+      listeningTimeoutRef.current = setTimeout(() => {
+        recognitionRef.current?.stop();
+      }, MAX_LISTENING_MS);
     }
   };
 
@@ -121,21 +181,53 @@ export default function HrChatWidget() {
     }
   }, [messages, loading, open]);
 
-  // HR-only gate — renders nothing for any other role.
-  if (activeRole !== 'hr') return null;
+  // Auto-grow the textarea for ANY change to `input` — typing, paste, voice
+  // transcript, or a suggestion-chip click — not just onChange, since several
+  // of those set the value programmatically and would otherwise never resize.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 96) + 'px';
+  }, [input]);
 
-  const handleSend = async () => {
-    const text = input.trim();
+  // Mirror current state into the module-level store so it survives this
+  // component being unmounted/remounted by route navigation.
+  useEffect(() => { hrChatStore.open = open; }, [open]);
+  useEffect(() => { hrChatStore.messages = messages; }, [messages]);
+
+    // Explicit wipe on logout — this is the ONLY thing besides a real page
+  // refresh that should clear history. Both HR and interviewer are valid,
+  // persisted roles; only a null/undefined activeRole means logged out.
+  useEffect(() => {
+    if (!activeRole) {
+      clearHrChatStore();
+    }
+  }, [activeRole]);
+
+    // Visible to HR and interviewers — interviewer scoping (own data only) is
+  // enforced server-side, not just here.
+  if (activeRole !== 'hr' && activeRole !== 'interviewer') return null;
+
+      const sendText = async (rawText: string, viaVoice: boolean = false) => {
+    const text = rawText.trim();
     if (!text || loading) return;
 
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', text };
+    const historyForRequest = messages;
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setLoading(true);
 
     try {
-      const reply = await sendMessageToHrAgent(text, messages);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'agent', text: reply }]);
+      const reply = await sendMessageToHrAgent(text, historyForRequest, activeRole ?? 'hr', user?.email ?? '');
+      const agentId = crypto.randomUUID();
+      setMessages(prev => [...prev, { id: agentId, role: 'agent', text: reply }]);
+      // Only auto-read the reply aloud when the question itself came in by voice —
+      // typed questions just show the Listen icon, no auto-play.
+      if (viaVoice) {
+        speakMessage(agentId, reply);
+      }
     } catch {
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: 'agent',
@@ -146,7 +238,48 @@ export default function HrChatWidget() {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  // Keep the ref current so the speech-recognition callback (set up once in
+  // useEffect above) always calls the latest version of sendText.
+  sendTextRef.current = sendText;
+
+  const handleSend = () => sendText(input, false);
+
+  // ── Text-to-speech (Web Speech Synthesis API, client-side only) ──
+  const pickFemaleVoice = (): SpeechSynthesisVoice | undefined => {
+    const voices = window.speechSynthesis.getVoices();
+    const femaleHints = ['female', 'zira', 'samantha', 'victoria', 'susan', 'google uk english female', 'google us english'];
+    return (
+      voices.find(v => femaleHints.some(hint => v.name.toLowerCase().includes(hint))) ||
+      voices.find(v => v.lang.startsWith('en')) ||
+      voices[0]
+    );
+  };
+
+  const speakMessage = (id: string, text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const plainText = text.replace(/\*\*/g, '');
+    const utterance = new SpeechSynthesisUtterance(plainText);
+    const voice = pickFemaleVoice();
+    if (voice) utterance.voice = voice;
+    utterance.pitch = 1.1;
+    utterance.rate = 1.0;
+    utterance.onend = () => setSpeakingId(null);
+    utterance.onerror = () => setSpeakingId(null);
+    setSpeakingId(id);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const toggleSpeak = (id: string, text: string) => {
+    if (speakingId === id) {
+      window.speechSynthesis.cancel();
+      setSpeakingId(null);
+    } else {
+      speakMessage(id, text);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -179,8 +312,12 @@ export default function HrChatWidget() {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <div>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: T.white }}>HR Assistant</div>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginTop: '1px' }}>Ask about candidates, jobs, interviews</div>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: T.white }}>
+                {activeRole === 'interviewer' ? 'Interview Assistant' : 'HR Assistant'}
+              </div>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', marginTop: '1px' }}>
+                {activeRole === 'interviewer' ? 'Ask about your interviews' : 'Ask about candidates, jobs, interviews'}
+              </div>
             </div>
             <button
               onClick={() => setOpen(false)}
@@ -211,11 +348,14 @@ export default function HrChatWidget() {
                   Ask me about candidates, jobs, interviews, or offers.
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
-                  {[
+                                    {(activeRole === 'interviewer' ? [
+                    'What interviews do I have scheduled?',
+                    'What candidates have I interviewed?',
+                  ] : [
                     'Show shortlisted candidates for interview? ',
                     'How many active jobs are there?',
                     'Who all have interviewer access?',
-                  ].map(suggestion => (
+                  ]).map(suggestion => (
                     <button
                       key={suggestion}
                       onClick={() => setInput(suggestion)}
@@ -255,9 +395,41 @@ export default function HrChatWidget() {
                 boxShadow: m.role === 'user'
                   ? '0 2px 6px rgba(240,124,45,0.25)'
                   : '0 1px 3px rgba(0,0,0,0.06)',
-                animation: 'msgIn 0.22s ease both',
+                                animation: 'msgIn 0.22s ease both',
               }}>
                 {m.role === 'agent' ? renderFormattedMessage(m.text) : m.text}
+                                {m.role === 'agent' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px' }}>
+                    {'speechSynthesis' in window && (
+                      <button
+                        onClick={() => toggleSpeak(m.id, m.text)}
+                        aria-label={speakingId === m.id ? 'Stop reading aloud' : 'Read aloud'}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '4px',
+                          background: 'none', border: 'none', cursor: 'pointer',
+                          padding: 0, color: speakingId === m.id ? T.orange : T.gray400,
+                          fontSize: '10px', fontFamily: T.font,
+                        }}
+                      >
+                        {speakingId === m.id ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                        {speakingId === m.id ? 'Stop' : 'Listen'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleCopy(m.id, m.text)}
+                      aria-label={copiedId === m.id ? 'Copied' : 'Copy message'}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '4px',
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        padding: 0, color: copiedId === m.id ? '#22C55E' : T.gray400,
+                        fontSize: '10px', fontFamily: T.font,
+                      }}
+                    >
+                      {copiedId === m.id ? <Check size={12} /> : <Copy size={12} />}
+                      {copiedId === m.id ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
             {loading && (
@@ -279,12 +451,17 @@ export default function HrChatWidget() {
 
           {/* Input row */}
           <div style={{ padding: '10px', borderTop: `0.5px solid ${T.gray200}`, display: 'flex', gap: '8px' }}>
-            <input
+            <textarea
+              ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={listening ? 'Listening…' : 'Type your question…'}
               disabled={loading}
+              rows={1}
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               style={{
                 flex: 1,
                 border: `1px solid ${listening ? T.orange : T.gray200}`,
@@ -294,6 +471,11 @@ export default function HrChatWidget() {
                 fontFamily: T.font,
                 outline: 'none',
                 color: T.text,
+                resize: 'none',
+                minHeight: '18px',
+                maxHeight: '96px',
+                lineHeight: 1.4,
+                overflowY: 'auto',
                 transition: 'border-color 0.15s, box-shadow 0.15s',
               }}
               onFocus={e => {
@@ -304,7 +486,7 @@ export default function HrChatWidget() {
                 e.currentTarget.style.borderColor = listening ? T.orange : T.gray200;
                 e.currentTarget.style.boxShadow = 'none';
               }}
-            />          
+            />         
             {speechSupported && (
               <button
                 onClick={toggleListening}
