@@ -273,6 +273,17 @@ export default function CandidateSlotPage() {
                 );
               })}
             </div>
+
+            {!slotsLoading && (
+              <div style={{ marginTop: 16, padding: '12px 16px', background: '#F9FAFB', border: '1px dashed #E5E7EB', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+                  None of these slots match your preference?
+                </div>
+                <div style={{ fontSize: 12, color: COLOR_PRIMARY, fontWeight: 600 }}>
+                  Contact HR at <a href="mailto:support@atgeirsolutions.com" style={{ color: COLOR_ACCENT, textDecoration: 'none' }}>support@atgeirsolutions.com</a> to schedule manually.
+                </div>
+              </div>
+            )}
           </div>
 
           <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: 24 }}>

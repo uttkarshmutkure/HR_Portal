@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useLocation, Link } from 'react-router';
-import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2 } from 'lucide-react';
+import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2, RefreshCw, UserCog } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { EmailService } from '../../services/emailService';
 import { listJobs } from '../../services/screening';
@@ -8,6 +8,8 @@ import { useToast } from '../components/ToastContext';
 
 const FONT = 'Inter, sans-serif';
 const DATA_MANAGER_URL = import.meta.env.VITE_DATA_MANAGER_URL;
+const GET_CANDIDATE_SLOTS_URL = import.meta.env.VITE_GET_CANDIDATE_SLOTS_URL;
+const SAVE_SLOTS_URL = import.meta.env.VITE_SAVE_SLOTS_URL;
 
 const AVATAR_COLORS = [
   { bg: '#FFF7ED', color: '#F07C2D' },
@@ -153,9 +155,165 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
   );
 };
 
+// ── Manual Schedule Modal ─────────────────────────────────────────────────────
+const ManualScheduleModal = ({ cand, jobId, onClose, onSuccess }: {
+  cand: any; jobId: string; onClose: () => void; onSuccess: () => void;
+}) => {
+  const { showToast } = useToast();
+  const [slots, setSlots] = useState<{ day: string; start_time: string; end_time: string; work_mode: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<{ day: string; start_time: string; end_time: string; work_mode: string } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const DAY_NAME_TO_INDEX: Record<string, number> = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6,
+  };
+  const nextDateForDay = (dayName: string): string => {
+    const targetIdx = DAY_NAME_TO_INDEX[dayName];
+    const today = new Date();
+    if (targetIdx === undefined) return today.toISOString().slice(0, 10);
+    const todayIdx = today.getDay();
+    let diff = (targetIdx - todayIdx + 7) % 7;
+    if (diff === 0) diff = 7;
+    const result = new Date(today);
+    result.setDate(today.getDate() + diff);
+    const y = result.getFullYear(), m = String(result.getMonth() + 1).padStart(2, '0'), d = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const fetchSlots = () => {
+    setLoading(true);
+    setSelected(null);
+    fetch(GET_CANDIDATE_SLOTS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId, candidateId: cand.candidate_id, round: 'round1', mode: 'manual' }),
+    })
+      .then(r => r.json())
+      .then(data => setSlots(data.success && Array.isArray(data.slots) ? data.slots : []))
+      .catch(err => { console.error(err); showToast('Failed to load slots', 'error'); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchSlots(); /* eslint-disable-next-line */ }, []);
+
+  const handleConfirm = () => {
+    if (!selected) return;
+    setConfirming(true);
+
+    const payload = {
+      jobId,
+      candidateId: cand.candidate_id,
+      round: 'round1',
+      candidateName: cand.name,
+      candidateEmail: cand.email,
+      selectedSlots: [{
+        raw: `${selected.day}|${selected.start_time}-${selected.end_time}`,
+        slot_date: nextDateForDay(selected.day),
+        slot_start_time: selected.start_time,
+        slot_end_time: selected.end_time,
+      }],
+    };
+
+    fetch(SAVE_SLOTS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(r => r.json())
+      .then(() => {
+        showToast(`Interview manually scheduled for ${cand.name}!`, 'success');
+        onSuccess();
+      })
+      .catch(err => {
+        console.error(err);
+        showToast('Failed to save manual slot.', 'error');
+      })
+      .finally(() => setConfirming(false));
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.45)', backdropFilter: 'blur(3px)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column', maxHeight: '92vh', boxShadow: '0 25px 40px rgba(0,0,0,0.12)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '0.5px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#111827', fontFamily: FONT }}>Manual Slot Selection</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · Round 1 (Technical)</p>
+          </div>
+          <button onClick={onClose} disabled={confirming} style={{ background: 'none', border: 'none', fontSize: 18, cursor: confirming ? 'not-allowed' : 'pointer', color: '#9CA3AF' }}>✕</button>
+        </div>
+
+        <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1, fontFamily: FONT }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Free Interviewer Slots</label>
+            <button
+              onClick={fetchSlots}
+              disabled={loading}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500, color: '#F07C2D', background: 'none', border: '0.5px solid #FFEDD5', borderRadius: 6, padding: '4px 10px', cursor: loading ? 'not-allowed' : 'pointer' }}
+            >
+              <RefreshCw size={11} style={loading ? { animation: 'spin 1s linear infinite' } : {}} /> Refresh
+            </button>
+          </div>
+
+          {loading && <div style={{ fontSize: 13, color: '#6B7280' }}>Loading available slots…</div>}
+          {!loading && slots.length === 0 && <div style={{ fontSize: 13, color: '#DC2626' }}>No free slots currently available.</div>}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {slots.map((slot, idx) => {
+              const isSelected = selected?.day === slot.day && selected?.start_time === slot.start_time && selected?.end_time === slot.end_time;
+              const isOnline = slot.work_mode === 'WFH';
+              return (
+                <button
+                  key={idx}
+                  onClick={() => setSelected(slot)}
+                  style={{
+                    padding: '12px 16px', borderRadius: 8,
+                    border: `1px solid ${isSelected ? '#F07C2D' : '#E5E7EB'}`,
+                    background: isSelected ? '#FFF7ED' : '#fff',
+                    color: isSelected ? '#F07C2D' : '#374151',
+                    fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span>{slot.day}, {slot.start_time} - {slot.end_time}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 12,
+                      background: isOnline ? '#EFF6FF' : '#F0FDF4',
+                      color: isOnline ? '#1D4ED8' : '#15803D',
+                      border: `1px solid ${isOnline ? '#BFDBFE' : '#BBF7D0'}`,
+                    }}>
+                      {isOnline ? 'Online' : 'In-Person (Office)'}
+                    </span>
+                  </div>
+                  {isSelected && (
+                    <span style={{ fontSize: 10, background: '#F07C2D', color: '#fff', padding: '2px 8px', borderRadius: 12 }}>Selected</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 24px', borderTop: '0.5px solid #E5E7EB', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button disabled={confirming} onClick={onClose} style={{ padding: '9px 18px', fontSize: 13, fontWeight: 500, fontFamily: FONT, background: '#F9FAFB', color: '#374151', border: '0.5px solid #E5E7EB', borderRadius: 8, cursor: confirming ? 'not-allowed' : 'pointer' }}>Cancel</button>
+          <button
+            disabled={!selected || confirming}
+            onClick={handleConfirm}
+            style={{ padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: FONT, background: selected ? '#F07C2D' : '#E5E7EB', color: selected ? '#fff' : '#9CA3AF', border: 'none', borderRadius: 8, cursor: !selected || confirming ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            {confirming && <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />}
+            {confirming ? 'Scheduling...' : 'Confirm & Schedule'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Candidate Row ──────────────────────────────────────────────────────────────
-function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule }: {
-  candidate: any; rank: number; jobId: string; jdTitle: string; onOpenSchedule: (c: any) => void;
+function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule, onOpenManualSchedule }: {
+  candidate: any; rank: number; jobId: string; jdTitle: string; onOpenSchedule: (c: any) => void; onOpenManualSchedule: (c: any) => void;
 }) {
   const avatarStyle = AVATAR_COLORS[rank % AVATAR_COLORS.length];
   const initials    = candidate.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
@@ -221,6 +379,12 @@ function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule }: {
               <Calendar size={11} /> Schedule & Move
             </button>
           )}
+          <button
+            onClick={e => { e.stopPropagation(); onOpenManualSchedule(candidate); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 500, fontFamily: FONT, background: '#F5F3FF', border: '0.5px solid #DDD6FE', borderRadius: '5px', color: '#7C3AED', cursor: 'pointer' }}
+          >
+            <UserCog size={11} /> Manual Slot Selection
+          </button>
         </div>
       </div>
     </div>
@@ -238,6 +402,7 @@ export default function ShortlistedPage() {
   const [interviewers, setInterviewers] = useState<any[]>([]);
   const [loading,      setLoading     ] = useState(true);
   const [scheduleCand, setScheduleCand] = useState<any | null>(null);
+  const [manualCand,   setManualCand  ] = useState<any | null>(null);
   const [refreshKey,   setRefreshKey  ] = useState(0);
 
   // Load job title
@@ -288,6 +453,15 @@ export default function ShortlistedPage() {
             interviewers={interviewers}
             onClose={() => setScheduleCand(null)}
             onSuccess={() => { setScheduleCand(null); setRefreshKey(k => k + 1); }}
+          />
+        )}
+        
+        {manualCand && (
+          <ManualScheduleModal
+            cand={manualCand}
+            jobId={jobId}
+            onClose={() => setManualCand(null)}
+            onSuccess={() => { setManualCand(null); setRefreshKey(k => k + 1); }}
           />
         )}
 
@@ -342,6 +516,7 @@ export default function ShortlistedPage() {
               jobId={jobId}
               jdTitle={jdTitle}
               onOpenSchedule={setScheduleCand}
+              onOpenManualSchedule={setManualCand}
             />
           ))}
         </div>

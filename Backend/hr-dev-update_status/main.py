@@ -239,23 +239,27 @@ def update_candidate_status(request):
                         SELECT
                             @job_id AS job_id,
                             @candidate_id AS candidate_id,
+                            @round AS round,
+                            @slot_id AS slot_id,
                             @name AS candidate_name,
                             @email AS candidate_email,
                             @status AS status
                     ) S
-                    ON T.job_id = S.job_id AND T.candidate_id = S.candidate_id
+                    ON T.job_id = S.job_id AND T.candidate_id = S.candidate_id AND T.round = S.round
                     WHEN MATCHED THEN
                         UPDATE SET 
                             status = S.status,
                             confirmed_at = CURRENT_TIMESTAMP()
                     WHEN NOT MATCHED THEN
                         INSERT (slot_id, job_id, candidate_id, candidate_name, candidate_email, round, status, confirmed_at)
-                        VALUES (S.candidate_id, S.job_id, S.candidate_id, S.candidate_name, S.candidate_email, 'round1', S.status, CURRENT_TIMESTAMP())
+                        VALUES (S.slot_id, S.job_id, S.candidate_id, S.candidate_name, S.candidate_email, S.round, S.status, CURRENT_TIMESTAMP())
                 """
                 merge_config = bigquery.QueryJobConfig(
                     query_parameters=[
                         bigquery.ScalarQueryParameter("job_id", "STRING", row.job_id),
                         bigquery.ScalarQueryParameter("candidate_id", "STRING", row.candidate_id),
+                        bigquery.ScalarQueryParameter("round", "STRING", "round1"),
+                        bigquery.ScalarQueryParameter("slot_id", "STRING", f"{row.candidate_id}_round1"),
                         bigquery.ScalarQueryParameter("name", "STRING", row.name),
                         bigquery.ScalarQueryParameter("email", "STRING", row.email),
                         bigquery.ScalarQueryParameter("status", "STRING", candidate_result),

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { Check, X, Clock, Users, RefreshCw } from 'lucide-react';
+import { Check, X, Clock, Users, RefreshCw, UserCog, Loader2 } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { ShortlistStore } from '../../services/shortlistStore';
 import { FeedbackStore } from '../../services/feedbackStore';
@@ -12,6 +12,8 @@ import { useToast } from '../components/ToastContext';
 import { useAuth } from '../components/AuthContext';
 import { SalaryRules, DEFAULT_SALARY_RULES, GenerateChoiceModal, SalaryDetailsModal } from './OfferGenerationPage';
 
+const GET_CANDIDATE_SLOTS_URL = import.meta.env.VITE_GET_CANDIDATE_SLOTS_URL;
+const SAVE_SLOTS_URL = import.meta.env.VITE_SAVE_SLOTS_URL;
 // ── Shared Interviewer Store ───────────────────────────────────────────────────
 const InterviewerHelper = {
   get: (jobId: string) => {
@@ -160,6 +162,162 @@ const statusesCache: Record<string, Record<string, [string, string | null]>> = {
 const profileCache: Record<string, any> = {};
 const interviewersCache: Record<string, Record<string, Record<string, string | null>>> = {};
 
+// ── Manual Schedule Modal (Round 2 / HR) ────────────────────────────────────────
+const ManualScheduleModal = ({ cand, jobId, round, roundLabel, onClose, onSuccess }: {
+  cand: any; jobId: string; round: string; roundLabel: string; onClose: () => void; onSuccess: () => void;
+}) => {
+  const { showToast } = useToast();
+  const [slots, setSlots] = useState<{ day: string; start_time: string; end_time: string; work_mode: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<{ day: string; start_time: string; end_time: string; work_mode: string } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const DAY_NAME_TO_INDEX: Record<string, number> = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6,
+  };
+  const nextDateForDay = (dayName: string): string => {
+    const targetIdx = DAY_NAME_TO_INDEX[dayName];
+    const today = new Date();
+    if (targetIdx === undefined) return today.toISOString().slice(0, 10);
+    const todayIdx = today.getDay();
+    let diff = (targetIdx - todayIdx + 7) % 7;
+    if (diff === 0) diff = 7;
+    const result = new Date(today);
+    result.setDate(today.getDate() + diff);
+    const y = result.getFullYear(), m = String(result.getMonth() + 1).padStart(2, '0'), d = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const fetchSlots = () => {
+    setLoading(true);
+    setSelected(null);
+    fetch(GET_CANDIDATE_SLOTS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId, candidateId: cand.candidate_id, round, mode: 'manual' }),
+    })
+      .then(r => r.json())
+      .then(data => setSlots(data.success && Array.isArray(data.slots) ? data.slots : []))
+      .catch(err => { console.error(err); showToast('Failed to load slots', 'error'); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchSlots(); /* eslint-disable-next-line */ }, []);
+
+  const handleConfirm = () => {
+    if (!selected) return;
+    setConfirming(true);
+
+    const payload = {
+      jobId,
+      candidateId: cand.candidate_id,
+      round,
+      candidateName: cand.name,
+      candidateEmail: cand.email,
+      selectedSlots: [{
+        raw: `${selected.day}|${selected.start_time}-${selected.end_time}`,
+        slot_date: nextDateForDay(selected.day),
+        slot_start_time: selected.start_time,
+        slot_end_time: selected.end_time,
+      }],
+    };
+
+    fetch(SAVE_SLOTS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(r => r.json())
+      .then(() => {
+        showToast(`Interview manually scheduled for ${cand.name}!`, 'success');
+        onSuccess();
+      })
+      .catch(err => {
+        console.error(err);
+        showToast('Failed to save manual slot.', 'error');
+      })
+      .finally(() => setConfirming(false));
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.45)', backdropFilter: 'blur(3px)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column', maxHeight: '92vh', boxShadow: '0 25px 40px rgba(0,0,0,0.12)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '0.5px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#111827', fontFamily: 'Inter, sans-serif' }}>Manual Slot Selection</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: 'Inter, sans-serif' }}>{cand.name} · {roundLabel}</p>
+          </div>
+          <button onClick={onClose} disabled={confirming} style={{ background: 'none', border: 'none', fontSize: 18, cursor: confirming ? 'not-allowed' : 'pointer', color: '#9CA3AF' }}>✕</button>
+        </div>
+
+        <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1, fontFamily: 'Inter, sans-serif' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Free Interviewer Slots</label>
+            <button
+              onClick={fetchSlots}
+              disabled={loading}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 500, color: '#F07C2D', background: 'none', border: '0.5px solid #FFEDD5', borderRadius: 6, padding: '4px 10px', cursor: loading ? 'not-allowed' : 'pointer' }}
+            >
+              <RefreshCw size={11} style={loading ? { animation: 'spin 1s linear infinite' } : {}} /> Refresh
+            </button>
+          </div>
+
+          {loading && <div style={{ fontSize: 13, color: '#6B7280' }}>Loading available slots…</div>}
+          {!loading && slots.length === 0 && <div style={{ fontSize: 13, color: '#DC2626' }}>No free slots currently available.</div>}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {slots.map((slot, idx) => {
+              const isSelected = selected?.day === slot.day && selected?.start_time === slot.start_time && selected?.end_time === slot.end_time;
+              const isOnline = slot.work_mode === 'WFH';
+              return (
+                <button
+                  key={idx}
+                  onClick={() => setSelected(slot)}
+                  style={{
+                    padding: '12px 16px', borderRadius: 8,
+                    border: `1px solid ${isSelected ? '#F07C2D' : '#E5E7EB'}`,
+                    background: isSelected ? '#FFF7ED' : '#fff',
+                    color: isSelected ? '#F07C2D' : '#374151',
+                    fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span>{slot.day}, {slot.start_time} - {slot.end_time}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 12,
+                      background: isOnline ? '#EFF6FF' : '#F0FDF4',
+                      color: isOnline ? '#1D4ED8' : '#15803D',
+                      border: `1px solid ${isOnline ? '#BFDBFE' : '#BBF7D0'}`,
+                    }}>
+                      {isOnline ? 'Online' : 'In-Person (Office)'}
+                    </span>
+                  </div>
+                  {isSelected && (
+                    <span style={{ fontSize: 10, background: '#F07C2D', color: '#fff', padding: '2px 8px', borderRadius: 12 }}>Selected</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 24px', borderTop: '0.5px solid #E5E7EB', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button disabled={confirming} onClick={onClose} style={{ padding: '9px 18px', fontSize: 13, fontWeight: 500, fontFamily: 'Inter, sans-serif', background: '#F9FAFB', color: '#374151', border: '0.5px solid #E5E7EB', borderRadius: 8, cursor: confirming ? 'not-allowed' : 'pointer' }}>Cancel</button>
+          <button
+            disabled={!selected || confirming}
+            onClick={handleConfirm}
+            style={{ padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: 'Inter, sans-serif', background: selected ? '#F07C2D' : '#E5E7EB', color: selected ? '#fff' : '#9CA3AF', border: 'none', borderRadius: 8, cursor: !selected || confirming ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            {confirming && <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />}
+            {confirming ? 'Scheduling...' : 'Confirm & Schedule'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function InterviewPipelinePage() {
   const { showToast } = useToast();
   const { user, activeRole } = useAuth();
@@ -201,6 +359,7 @@ export default function InterviewPipelinePage() {
   const [candidateStatuses,  setCandidateStatuses]  = useState<Record<string, [string, string | null]>>({});
   // Per-candidate, per-round interviewer email — used to filter visibility for the Interviewer role
   const [candidateInterviewers, setCandidateInterviewers] = useState<Record<string, Record<string, string | null>>>({});
+  const [manualCand, setManualCand] = useState<any | null>(null);
 
 
   // Only reset detailTab when activeTab changes, not when detailTab itself changes.
@@ -1330,9 +1489,10 @@ export default function InterviewPipelinePage() {
                       key={cand.candidate_id}
                       className={`cand-row ${selectedCandId === cand.candidate_id ? 'selected' : ''}`}
                       onClick={() => setSelectedCandId(cand.candidate_id)}
+                      style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12 }}
                     >
                       {/* LEFT: avatar + info */}
-                      <div className="cand-left">
+                      <div className="cand-left" style={{ flex: '1 1 260px', minWidth: 0 }}>
                         <div className={`av av-${(idx % 3) + 1}`}>
                           {cand.name.split(' ').map(n => n[0]).join('').slice(0,2).toUpperCase()}
                         </div>
@@ -1350,14 +1510,14 @@ export default function InterviewPipelinePage() {
                       </div>
 
                       {/* RIGHT: score + actions */}
-                      <div className="cand-right">
-                        <div className="c-score">
+                      <div className="cand-right" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0, width: '100%' }}>
+                        <div className="c-score" style={{ alignSelf: 'flex-end' }}>
                           <div className="c-score-num">{Math.round(cand.final_score * 100)}</div>
                           <div className="c-score-lbl">AI Score</div>
                         </div>
 
                         {activeTab !== 'onboarding' && (
-                          <div className="row-acts" onClick={e => e.stopPropagation()}>
+                          <div className="row-acts" onClick={e => e.stopPropagation()} style={{ display: 'flex', flexWrap: 'nowrap', justifyContent: 'flex-end', gap: 6, width: '100%' }}>
                             
                             {/* --- ADD THIS NEW BUTTON --- */}
                             <button 
@@ -1376,6 +1536,17 @@ export default function InterviewPipelinePage() {
                               View Pipeline
                             </button>
                             {/* --------------------------- */}
+
+                            {(activeTab === 'round2' || activeTab === 'hrround') && (
+                              <button
+                                className="btn-sm"
+                                onClick={e => { e.stopPropagation(); setManualCand(cand); }}
+                                title="Manual Slot Selection"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F5F3FF', borderColor: '#DDD6FE', color: '#7C3AED', whiteSpace: 'nowrap' }}
+                              >
+                                <UserCog size={12} /> Manual Slot
+                              </button>
+                            )}
 
                             <button 
                               className="btn-sm danger btn-icon" 
@@ -1409,6 +1580,17 @@ export default function InterviewPipelinePage() {
               )}
             </div>
           </div>
+
+          {manualCand && (
+            <ManualScheduleModal
+              cand={manualCand}
+              jobId={jobId!}
+              round={activeTab === 'round2' ? 'technical' : 'hr'}
+              roundLabel={activeTab === 'round2' ? 'Round 2 (Advanced Technical)' : 'HR Round'}
+              onClose={() => setManualCand(null)}
+              onSuccess={() => { setManualCand(null); setRefreshKey(k => k + 1); }}
+            />
+          )}
 
           {/* ── Detail Panel ──────────────────────────────────────────────── */}
           {selectedCandidate && (

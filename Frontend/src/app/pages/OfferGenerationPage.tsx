@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip, Check, Pencil, Download, Mic, Square } from 'lucide-react';
+import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip, Check, Pencil, Download, Mic, Square, Info } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { useToast } from '../components/ToastContext';
 import { TopCandidate } from '../../services/screening';
@@ -1213,10 +1213,10 @@ function ChatMessages({ msgs, typing, messagesEndRef, jdTitle, jobId, cand, hand
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7, width: '100%', maxWidth: 380, marginTop: 4 }}>
             {[
-              { icon: <MessageSquare size={12} />, label: 'Chat with me', desc: 'Step-by-step here' },
-              { icon: <FileText size={12} />, label: 'Fill a form', desc: 'Structured fields' },
-              { icon: <Upload size={12} />, label: 'Upload a letter', desc: 'Already have one? Send as-is' },
-              { icon: <Copy size={12} />, label: 'Copy a candidate', desc: 'Reuse a similar offer' },
+              { icon: <MessageSquare size={12} />, label: 'Chat with me', desc: "Answer a few quick questions and I'll draft it", detail: "I'll ask you for role, salary, joining date, and other details one by one in a conversation, then generate the offer letter for your review." },
+              { icon: <FileText size={12} />, label: 'Fill a form', desc: 'Enter salary, role & dates in a form', detail: 'Opens a structured form with all offer fields (CTC, designation, joining date, etc.) so you can fill everything at once instead of chatting.' },
+              { icon: <Upload size={12} />, label: 'Upload a letter', desc: 'Have one already? Upload it to use as-is', detail: 'Upload an existing offer letter file (PDF/DOCX) and I\'ll use it directly, with the option to review or tweak details before sending.' },
+              { icon: <Copy size={12} />, label: 'Copy a candidate', desc: "Reuse another candidate's offer as a starting point", detail: 'Pick a previous candidate\'s offer and I\'ll pre-fill this one with the same template/terms, so you only need to edit what\'s different.' },
             ].map(hint => (
               <div
                 key={hint.label}
@@ -1225,7 +1225,16 @@ function ChatMessages({ msgs, typing, messagesEndRef, jdTitle, jobId, cand, hand
                 onMouseOver={(e) => e.currentTarget.style.borderColor = ORANGE}
                 onMouseOut={(e) => e.currentTarget.style.borderColor = BORDER}
               >
-                <div style={{ color: ORANGE, display: 'flex' }}>{hint.icon}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ color: ORANGE, display: 'flex' }}>{hint.icon}</div>
+                  <div
+                    title={hint.detail}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ color: TEXT_MID, display: 'flex', cursor: 'help' }}
+                  >
+                    <Info size={11} />
+                  </div>
+                </div>
                 <div>
                   <div style={{ fontSize: 11.5, fontWeight: 600, color: TEXT_DARK }}>{hint.label}</div>
                   <div style={{ fontSize: 10, color: TEXT_MID, marginTop: 1 }}>{hint.desc}</div>

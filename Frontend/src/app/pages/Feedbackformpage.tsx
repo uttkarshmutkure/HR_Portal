@@ -163,12 +163,12 @@ export default function FeedbackFormPage() {
         if (result.alreadySubmitted) {
           setTokenError('already_submitted');
         } else {
-          setPayload({ ...parsed, candidateEmail: result.candidateEmail || '', candidateName: result.candidateName || parsed.candidateName });
-        }
-      })
-      .catch(() => {
-        setPayload(parsed);
-      });
+          setPayload({ ...parsed, skills: parsed.skills || [], candidateEmail: result.candidateEmail || '', candidateName: result.candidateName || parsed.candidateName });
+                }
+              })
+              .catch(() => {
+                setPayload({ ...parsed, skills: parsed.skills || [] });
+              });
   }, [token]);
 
   const isTechRound = payload?.round === 'round1' || payload?.round === 'technical';
@@ -221,7 +221,7 @@ export default function FeedbackFormPage() {
     
     return <StatusScreen
       icon={isAdvance ? <CheckCircle size={22} color="#10B981"/> : isHold ? <PauseCircle size={22} color="#3B82F6"/> : <XCircle size={22} color="#DC2626"/>}
-      title={isAdvance ? (isHrRound ? 'Moving to Offer Stage!' : 'Candidate Advanced!') : isHold ? 'Candidate on Hold' : 'Feedback Submitted'}
+      title={isAdvance ? (isHrRound ? 'Moving to Offer Stage!' : 'Candidate Advanced!') : isHold ? 'Candidate on Hold' : 'Candidate Rejected'}
       message={isAdvance
         ? isHrRound
           ? `${payload.candidateName} has successfully completed all interview rounds and has been moved to the Offer Stage.`
@@ -419,7 +419,7 @@ export default function FeedbackFormPage() {
             </div>
           </div>
             
-          {payload.skills.length > 0 && (
+          {(payload.skills?.length ?? 0) > 0 && (
             <div style={{ marginBottom: 20 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#111827', display: 'block', marginBottom: 6 }}>Mandatory Job Skills Verified</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
