@@ -13,6 +13,8 @@ import functions_framework
 from google import genai
 from google.genai import types
 
+from interviewer_prompt import INTERVIEWER_SQL_SYSTEM_PROMPT_TEMPLATE
+
 # ── Clients ───────────────────────────────────────────────────────────────────
 bq_client  = bigquery.Client()
 genai_client = genai.Client()
@@ -36,14 +38,36 @@ ENUM_CACHE_TTL_SEC = 6 * 60 * 60  # 6 hours
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCHEMA = {
-    "candidates": {
+            "candidates": {
         "columns": [
             "candidate_id", "job_id", "name", "email", "phone", "location",
             "last_organization", "minimum_qualification", "total_experience_years",
             "skills", "applied_at", "screening_status", "candidate_result",
             "ai_screening_results", "reject_reason",
         ],
-        "notes": "One row per candidate application. Join to jobs via job_id.",
+        "notes": (
+            "One row per candidate application. Join to jobs via job_id. "
+            "'Screened' / 'has been screened' means screening_status = 'COMPLETED' (regardless of "
+            "eventual outcome). "
+            "candidate_result is the PIPELINE STAGE a screened candidate has reached, with these "
+            "exact meanings — use them precisely, this is a business definition, not a guess: "
+            "'Archive' = rejected/eliminated after screening. "
+            "'Human Review' = pending manual review, outcome not yet decided. "
+            "'Passed' = passed AI screening, awaiting the shortlisting decision. "
+            "'Shortlisted' = shortlisted but not yet moved into the interview pipeline. "
+            "'Interview' = shortlisted AND already moved into interviews (a later, further-along "
+            "stage than 'Shortlisted', not a separate/unrelated status). "
+            "THEREFORE: 'shortlisted candidates' (broad, common usage) means candidate_result IN "
+            "('Shortlisted', 'Interview') — both are shortlisted, one has simply progressed further. "
+            "'candidates in interview' / 'interview stage' specifically means candidate_result = "
+            "'Interview' only. "
+            "'passed candidates' (from screening) means candidate_result = 'Passed' specifically. "
+            "'rejected' is AMBIGUOUS between two different stages — if the user's question gives no "
+            "stage context, default to candidate_result = 'Archive' (rejected at/after screening); "
+            "but if the question mentions an interview round, use interview_feedback.verdict = "
+            "'reject' instead (rejected during/after an interview) — these are different candidates "
+            "and different tables, do not conflate them."
+        ),
     },
     "jobs": {
         "columns": [
@@ -131,6 +155,11 @@ SCHEMA = {
 
 ALLOWED_TABLES = set(SCHEMA.keys())
 
+INTERVIEWER_ALLOWED_TABLES = {
+    "interviewer_slots", "candidate_slot_selections",
+    "interview_feedback", "interview_round_questions",
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ENUM DISCOVERY — ask BigQuery for real distinct values at runtime instead of
 # hardcoding guesses, so the assistant stays correct as data changes.
@@ -138,6 +167,7 @@ ALLOWED_TABLES = set(SCHEMA.keys())
 
 ENUM_COLUMNS = [
     ("jobs", "status"),
+    ("jobs", "title"),
     ("candidates", "screening_status"),
     ("candidates", "candidate_result"),
     ("interview_feedback", "round"),
@@ -219,9 +249,10 @@ from the real table — trust them over any assumption you might otherwise make 
 {{schema_block}}
 
 RULES:
-1. Output STRICT JSON only, matching one of these two shapes — no prose, no markdown fences:
+1. Output STRICT JSON only, matching one of these three shapes — no prose, no markdown fences:
    {{"sql": "SELECT ..."}}
-   {{"clarify": "A short question to ask the HR user because their request is ambiguous or unanswerable with this schema."}}
+   {{"clarify": "A short, friendly question to ask because the request is ambiguous or unanswerable."}}
+   {{"reply": "A direct answer, used ONLY for rule 16 below — reformatting/sorting/presenting data already given earlier in this conversation, with no new data needed."}}
 2. The query must be a single SELECT statement. Never write INSERT/UPDATE/DELETE/MERGE/DROP/ALTER/CREATE or any DDL/DML.
 3. Never use SELECT * — always list explicit columns from the schema above.
 4. Never reference a table or column that isn't listed above.
@@ -250,7 +281,18 @@ RULES:
 
 11. If a column's "actual stored values" list is shown above, pick the closest matching value(s) from that real list rather than inventing one.
 12. Some columns store multiple values as a comma-separated STRING (not a true array) — their notes will say so explicitly (e.g. users.roles). For those, use LOWER(column) LIKE LOWER('%value%'), never UNNEST. Only use UNNEST on a column explicitly documented as an actual ARRAY type.
-13. For PEOPLE'S NAMES, EMAILS, and JOB TITLES — free-text fields, not fixed categories — never require an exact or full match. HR users routinely type partial names (a first name only, a nickname, a partial title). ALWAYS use LOWER(column) LIKE LOWER('%value%') for these fields so partial input still matches.
+13. JOB TITLES are bounded and fully listed above under jobs.title's "actual stored values" — treat
+   this like any other enum column, NOT free text. However the user's wording will often NOT match
+   the stored spelling exactly (missing spaces, abbreviations, typos, casual phrasing — e.g.
+   "dataengineer", "data eng", "sr backend dev" for "Senior Backend Engineer"). Use your own
+   semantic judgment to identify which real title(s) from the list the user most likely means, then
+   filter using LOWER(title) = LOWER('<the real title you identified>') — an exact match against the
+   value you semantically resolved to, not a fuzzy SQL pattern. If genuinely more than one real title
+   could plausibly match, respond with {{"clarify": ...}} listing the real candidates and asking
+   which one they meant, rather than guessing or returning zero rows.
+
+   PEOPLE'S NAMES and EMAILS are true free text (too many distinct values to enumerate) — for these,
+   still use LOWER(column) LIKE LOWER('%value%') for partial matching as before.
 14. If the user's question refers back to a previous answer — explicitly ("above", "these", "them")
     OR implicitly (a short follow-up like "what about their experience" / "and their emails" that
     doesn't name any people/jobs on its own and only makes sense as a continuation) — look at the
@@ -260,11 +302,39 @@ RULES:
     (LOWER('a@x.com'), LOWER('b@x.com'))). When in doubt about whether a question is a continuation,
     check: does this question contain enough information to run standalone? If not, it's a
     continuation — use the history.
-15. If the request is dangerous, destructive, unrelated to HR data, or clearly outside the schema, respond with {{"clarify": "..."}} with a short, natural, friendly question — never mention SQL, queries, or that you are a query generator.
+15. If the request is dangerous, destructive, unrelated to HR data, or clearly outside the schema, respond with {{"clarify": "..."}} with a short, natural, friendly question.
+16. NO-NEW-QUERY REQUESTS: if the user is asking to (a) re-present, re-sort, re-count, or reformat
+   data ALREADY given earlier in this conversation, OR (b) explain/justify a PRIOR answer you gave
+   ("what criteria did you use", "why these candidates", "what did you consider") — do NOT write
+   new SQL for either case. Respond with {{"reply": "..."}} instead:
+   - For (a): directly reformat the data from history.
+   - For (b): honestly explain, in plain language, what filter/threshold/reasoning you actually
+     applied when generating the PRIOR query (visible to you in the conversation history's SQL
+     intent) — e.g. "I looked at rejected candidates with over 5 years of experience, since that
+     seemed like a reasonable signal they may have been worth a second look — but this wasn't a
+     fixed company policy, just my own judgment call. You may want to confirm the right threshold."
+     Never claim a rule or policy exists if you were actually just guessing a reasonable cutoff.
+   Only fall back to SQL if new data is genuinely needed that isn't in the history.
+17. NEVER, in any of the three response shapes, describe yourself, your capabilities, or your
+   limitations (e.g. never say "I can only generate SQL", "I am a query generator", "I cannot
+   reformat text"). If a request seems outside scope, just ask a natural clarifying question (rule
+   15) or fulfill it directly (rule 16) — never explain your own architecture to the user.
+18. SUBJECTIVE/JUDGMENT-CALL REQUESTS: if the user asks something inherently subjective with no
+   fixed database definition ("who deserves a second look", "who's a strong candidate", "who seems
+   worth screening"), you may use reasonable judgment to pick a concrete, defensible filter (e.g. an
+   experience threshold) — but you MUST state what criterion you chose directly in your answer, not
+   just show results silently, e.g. "Based on experience above 5 years among rejected candidates,
+   here's who might be worth a second look: ...". Never present a subjective filter as if it were an
+   objective fact about the data.
 """
 
 
-def _build_sql_system_prompt() -> str:
+def _build_sql_system_prompt(role: str = "hr", caller_email: str = "") -> str:
+    if role == "interviewer":
+        prompt = INTERVIEWER_SQL_SYSTEM_PROMPT_TEMPLATE.replace("{schema_block}", _schema_prompt_block())
+        prompt = prompt.replace("{project_id}", project_id).replace("{dataset_id}", dataset_id)
+        prompt = prompt.replace("{caller_email}", caller_email or "unknown")
+        return prompt
     return SQL_SYSTEM_PROMPT_TEMPLATE.replace("{schema_block}", _schema_prompt_block())
 
 
@@ -278,8 +348,8 @@ def _format_history(history: list) -> str:
     return "\n".join(lines)
 
 
-def _generate_sql(user_message: str, history: list = None) -> dict:
-    contents = [_build_sql_system_prompt()]
+def _generate_sql(user_message: str, history: list = None, role: str = "hr", caller_email: str = "") -> dict:
+    contents = [_build_sql_system_prompt(role, caller_email)]
     history_block = _format_history(history or [])
     if history_block:
         contents.append(history_block)
@@ -303,7 +373,7 @@ def _generate_sql(user_message: str, history: list = None) -> dict:
 # STEP 2 — SQL guardrail
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _validate_sql(sql: str) -> str | None:
+def _validate_sql(sql: str, role: str = "hr", caller_email: str = "") -> str | None:
     """Returns an error string if the query is not allowed, else None."""
     lowered = sql.strip().lower()
 
@@ -331,10 +401,17 @@ def _validate_sql(sql: str) -> str | None:
         if t not in ALLOWED_TABLES:
             return f"Table '{t}' is not permitted."
 
-    # Block sensitive columns by name, wherever they appear in the query text.
+        # Block sensitive columns by name, wherever they appear in the query text.
     for col in BLOCKED_COLUMNS:
         if re.search(rf"\b{re.escape(col)}\b", sql, flags=re.IGNORECASE):
             return f"Column '{col}' is not permitted."
+
+    if role == "interviewer":
+        for t in referenced_tables:
+            if t not in INTERVIEWER_ALLOWED_TABLES:
+                return f"Table '{t}' is not permitted for interviewer role."
+        if not caller_email or caller_email.lower() not in lowered:
+            return "Query does not scope to the caller's own email — blocked for interviewer role."
 
     return None
 
@@ -425,9 +502,15 @@ def chat_agent(request):
         if not user_message:
             return (json.dumps({"error": "Missing 'message'"}), 400, headers)
 
+        role = body.get('role', 'hr')
+        caller_email = (body.get('email') or '').strip()
+
         # ── Step 1: NL -> SQL ──
         history = body.get('history', [])
-        gen = _generate_sql(user_message, history)
+        gen = _generate_sql(user_message, history, role, caller_email)
+
+        if "reply" in gen:
+            return (json.dumps({"reply": gen["reply"]}), 200, headers)
 
         if "clarify" in gen:
             return (json.dumps({"reply": gen["clarify"]}), 200, headers)
@@ -437,10 +520,15 @@ def chat_agent(request):
             return (json.dumps({"reply": "I couldn't turn that into a query. Could you rephrase it?"}), 200, headers)
 
         # ── Step 2: Guardrail ──
-        error = _validate_sql(sql)
+        error = _validate_sql(sql, role, caller_email)
         if error:
             print(f"[chat_agent] BLOCKED SQL ({error}): {sql}")
-            return (json.dumps({"reply": "I can't run that request. Try asking about candidates, jobs, interviews, feedback, or offers."}), 200, headers)
+            fallback_msg = (
+                "I'm sorry, I can only share information related to your own interviews."
+                if role == "interviewer" else
+                "I can't run that request. Try asking about candidates, jobs, interviews, feedback, or offers."
+            )
+            return (json.dumps({"reply": fallback_msg}), 200, headers)
 
         sql = _enforce_limit(sql)
 
