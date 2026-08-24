@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import bigquery
 import functions_framework
@@ -24,6 +25,7 @@ ai_client = genai.Client(
 )
 
 ROUND_DURATIONS = {'round1': 30, 'technical': 60, 'hr': 30}
+ROUND_LABELS = {'round1': 'Round 1', 'technical': 'Technical Round', 'hr': 'HR Round'}
 
 SUPPORT_FOOTER = """
     <p style="margin:16px 0 0;font-size:12px;color:#9CA3AF;border-top:1px solid #F3F4F6;padding-top:16px;">
@@ -95,16 +97,47 @@ INTERVIEWER_EMAIL_TEMPLATE = """
 """
 
 
-def send_email_tool(to_email: str, subject: str, html_body: str) -> str:
-    """Sends an HTML email to notify candidates and interviewers."""
+def fill_template(template: str, fields: dict) -> str:
+    html_body = template.replace('{support_footer}', SUPPORT_FOOTER)
+    for key, value in fields.items():
+        html_body = html_body.replace(f'{{{key}}}', str(value))
+    return html_body
+
+
+def send_email(to_email: str, subject: str, html_body: str) -> bool:
     actual_recipient = test_email if test_email else to_email
     try:
         res = requests.post(email_api_url, json={"to": actual_recipient, "subject": subject, "body": html_body}, timeout=10)
-        if res.status_code == 200:
-            return "Email sent successfully."
-        return f"Failed with status: {res.status_code}"
+        return res.status_code == 200
     except Exception as e:
-        return f"Email send error: {str(e)}"
+        print(f"[MATCHMAKER] Email send error: {e}")
+        return False
+
+
+# ── Turn a "day name" (Monday, Tuesday, ...) into the next real calendar date ──
+DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+def next_date_for_day(day_name: str) -> str:
+    today = datetime.now()
+    try:
+        target_idx = DAY_NAMES.index(day_name)
+    except ValueError:
+        return today.strftime('%Y-%m-%d')
+    days_ahead = (target_idx - today.weekday() + 7) % 7
+    days_ahead = days_ahead if days_ahead != 0 else 7  # always the *next* occurrence, not today
+    return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+
+
+def format_date_human(date_str: str) -> str:
+    dt = datetime.strptime(date_str, '%Y-%m-%d')
+    return dt.strftime('%A, %d %B %Y')
+
+
+def format_time_range(start_time: str, end_time: str) -> str:
+    def fmt(t):
+        return datetime.strptime(t, '%H:%M').strftime('%I:%M %p').lstrip('0')
+    return f"{fmt(start_time)} - {fmt(end_time)}"
+
 
 @functions_framework.http
 def auto_matchmaker(request):
@@ -114,8 +147,6 @@ def auto_matchmaker(request):
 
     try:
         req_json = request.get_json(silent=True)
-
-        # Guard against missing/malformed body
         if not req_json:
             return ({"error": "Invalid JSON payload"}, 400, headers)
 
@@ -126,7 +157,6 @@ def auto_matchmaker(request):
         if not job_id or not candidate_id:
             return ({"error": "Missing jobId or candidateId"}, 400, headers)
 
-        # Fetch all 3 BQ queries in parallel
         def fetch_candidate():
             return list(bq_client.query(
                 f"SELECT candidate_name, candidate_email, slot_selected "
@@ -135,8 +165,6 @@ def auto_matchmaker(request):
                 f"ORDER BY confirmed_at DESC LIMIT 1"
             ))
 
-        # Fallback: technical/hr rows may have blank email if the frontend didn't
-        # pass candidateEmail when saving those slots. Get it from any other round.
         def fetch_candidate_contact_fallback():
             return list(bq_client.query(
                 f"SELECT candidate_name, candidate_email "
@@ -177,7 +205,6 @@ def auto_matchmaker(request):
         candidate_name  = candidate.candidate_name
         candidate_email = candidate.candidate_email
 
-        # If email/name is blank for this round, fall back to another round's row
         if not candidate_email or not candidate_name:
             fallback_rows = fetch_candidate_contact_fallback()
             if fallback_rows:
@@ -186,80 +213,76 @@ def auto_matchmaker(request):
                 if not candidate_name:
                     candidate_name = fallback_rows[0].candidate_name
 
-        candidate_template = CANDIDATE_EMAIL_TEMPLATE.replace('{support_footer}', SUPPORT_FOOTER)
-        interviewer_template = INTERVIEWER_EMAIL_TEMPLATE.replace('{support_footer}', SUPPORT_FOOTER)
+        if not free_interviewers:
+            return ({"success": True, "matchSuccess": False, "message": "No free interviewer slots available. Manual assignment required."}, 200, headers)
 
-        agent_instructions = f"""
-            You are an HR Matchmaker Agent. Match candidate time preferences with interviewer availability, book the slot, generate a Google Meet link, and send HTML emails.
+        # ── STEP 1: Ask Gemini ONLY to find a match — no function calling, no HTML, no booking.
+        # Small, structured JSON output only. This removes the malformed-function-call risk entirely
+        # for this step, since there are no tools involved.
+        match_prompt = f"""
+        You are matching a candidate's preferred interview time slots against a list of available interviewer slots.
 
-            PROCESS:
-            1. MATCH: Each entry in FREE INTERVIEWERS is a single available slot (slot_id, Interviewer_name, Interviewer_email, day, start_time, end_time, work_mode). Find an overlap between SELECTED SLOTS and any interviewer slot on the same day with matching time.
-            2. BOOK: Call book_interview_in_db, passing the matched interviewer slot's `slot_id` as `interviewer_id`, the matched slot's `Interviewer_name` as `interviewer_name`, `Interviewer_email` as `interviewer_email`, job_id="{job_id}", job_title="{job_title}", round_id="{interview_round}", the matched slot's `day`-derived actual calendar date as `date` (format YYYY-MM-DD), `start_time` and `end_time` from the matched slot, and `work_mode` from the matched slot.
-            3. MEET: Call create_meet_link (duration_mins = {ROUND_DURATIONS.get(interview_round, 45)}).
-            4. FEEDBACK LINK: Call generate_feedback_link(candidate_id="{candidate_id}", job_id="{job_id}", round_id="{interview_round}", candidate_name="{candidate_name}", job_title="{job_title}") to get the FEEDBACK_LINK. Use the returned value EXACTLY as-is — do not retype, shorten, or alter it.
-            5. EMAIL: Send TWO emails using the exact HTML templates below — fill in the placeholders with actual values. You MUST call send_email_tool twice: once for the candidate and once for the interviewer.
-            6. CANDIDATE REVIEW LINK: Call generate_candidate_review_link(candidate_id="{candidate_id}", job_id="{job_id}", round_id="{interview_round}", candidate_name="{candidate_name}", job_title="{job_title}") to get the CANDIDATE_REVIEW_LINK. Pass its return value into the candidate email unmodified.
+        SELECTED SLOTS (candidate's preferences):
+        {json.dumps(selected_slots)}
 
-            CANDIDATE EMAIL TEMPLATE (fill placeholders and pass as html_body):
-            {candidate_template}
+        FREE INTERVIEWER SLOTS (each is one slot: slot_id, Interviewer_name, Interviewer_email, day, start_time, end_time, work_mode):
+        {json.dumps(free_interviewers)}
 
-            INTERVIEWER EMAIL TEMPLATE (fill placeholders and pass as html_body):
-            {interviewer_template}
+        Find ONE interviewer slot whose `day` name and `start_time`/`end_time` overlap with any of the candidate's selected slots.
+        Match ONLY on day name and time overlap. Ignore work_mode when matching.
 
-            Placeholders to fill:
-            - CANDIDATE_NAME, INTERVIEWER_NAME, JOB_TITLE
-            - ROUND — human readable e.g. "Round 1", "Technical Round"
-            - DATE — formatted as "Wednesday, 10 June 2026"
-            - TIME — formatted as "10:30 AM - 11:00 AM"
-            - MODE — based on the matched slot's work_mode: if work_mode is "WFH", use "Online (Virtual)"; if work_mode is "WFO", use "In-Person (Office)"
-            - MEET_LINK — from create_meet_link result
-            - FEEDBACK_LINK — from generate_feedback_link result (interviewer email only)
-            - REVIEW_LINK — from generate_candidate_review_link result (candidate email only)
-
-            Replace the placeholder tokens in the templates exactly:
-            {{candidate_name}} → actual candidate name
-            {{interviewer_name}} → actual interviewer name
-            {{job_title}} → actual job title
-            {{round}} → human readable round name
-            {{date}} → formatted date
-            {{time}} → formatted time range
-            {{mode}} → "Online (Virtual)" if work_mode is WFH, or "In-Person (Office)" if work_mode is WFO
-            {{meet_link}} → Google Meet URL
-            {{feedback_link}} → exact return value of generate_feedback_link, unmodified
-            {{review_link}} → exact return value of generate_candidate_review_link, unmodified
-
-            RULES:
-            - Match ONLY on day name and time overlap. Ignore work_mode for matching.
-            - If no time match found, reply exactly: "No match found." and call NO tools.
-            """
-        
-        prompt = f"""
-        Find a match and book the interview.
-        CANDIDATE: {candidate_name} ({candidate_email})
-        CANDIDATE ID: {candidate_id}
-        JOB ID: {job_id}
-        SELECTED SLOTS: {json.dumps(selected_slots)}
-        FREE INTERVIEWERS: {json.dumps(free_interviewers)}
+        Respond with ONLY a JSON object, no other text:
+        - If a match is found: {{"matched": true, "slot_id": "...", "interviewer_name": "...", "interviewer_email": "...", "day": "...", "start_time": "HH:MM", "end_time": "HH:MM", "work_mode": "WFH or WFO"}}
+        - If no match is found: {{"matched": false}}
         """
 
-        chat = ai_client.chats.create(
+        response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
+            contents=match_prompt,
             config=types.GenerateContentConfig(
-                system_instruction=agent_instructions,
-                tools=[book_interview_in_db, create_meet_link, generate_feedback_link, generate_candidate_review_link, send_email_tool],
-                temperature=0.1
+                temperature=0.1,
+                response_mime_type="application/json",
             )
         )
 
-        agent_response = chat.send_message(prompt)
-        response_text = agent_response.text or ""
-        finish_reason = str(agent_response.candidates[0].finish_reason) if agent_response.candidates else 'N/A'
-        print(f"[MATCHMAKER] Agent response text: {response_text!r}")
-        print(f"[MATCHMAKER] Finish reason: {finish_reason}")
+        try:
+            match_result = json.loads(response.text)
+        except Exception as parse_err:
+            print(f"[MATCHMAKER] Failed to parse match response: {parse_err}. Raw: {response.text!r}")
+            return ({"success": True, "matchSuccess": False, "message": "Matching failed to produce valid output. Manual assignment required."}, 200, headers)
 
-        # ── Ground truth check: did a booking actually happen in BigQuery? ──
-        # Don't trust the agent's text alone — MALFORMED_FUNCTION_CALL or an
-        # empty final turn can both look ambiguous from text/finish_reason.
+        print(f"[MATCHMAKER] Match result: {match_result}")
+
+        if not match_result.get('matched'):
+            return ({"success": True, "matchSuccess": False, "message": "No time overlap found. Manual assignment required."}, 200, headers)
+
+        matched_slot_id       = match_result['slot_id']
+        matched_interviewer_name  = match_result['interviewer_name']
+        matched_interviewer_email = match_result['interviewer_email']
+        matched_day            = match_result['day']
+        matched_start_time     = match_result['start_time']
+        matched_end_time       = match_result['end_time']
+        matched_work_mode      = match_result['work_mode']
+
+        actual_date = next_date_for_day(matched_day)
+
+        # ── STEP 2: BOOK — plain Python, deterministic, no AI involved ──
+        booking_result = book_interview_in_db(
+            interviewer_id=matched_slot_id,
+            interviewer_name=matched_interviewer_name,
+            interviewer_email=matched_interviewer_email,
+            candidate_id=candidate_id,
+            job_id=job_id,
+            job_title=job_title,
+            round_id=interview_round,
+            date=actual_date,
+            start_time=matched_start_time,
+            end_time=matched_end_time,
+            work_mode=matched_work_mode,
+        )
+        print(f"[MATCHMAKER] Booking result: {booking_result}")
+
+        # Ground-truth check against BQ, same as before
         verify_query = f"""
             SELECT interviewer_id
             FROM `{project_id}.{dataset_id}.candidate_slot_selections`
@@ -278,39 +301,61 @@ def auto_matchmaker(request):
         print(f"[MATCHMAKER] Booking confirmed in DB: {booking_confirmed}")
 
         if not booking_confirmed:
-            # Retry once — MALFORMED_FUNCTION_CALL can corrupt the chat's internal
-            # history (mismatched function-call/response turns), so re-nudging the
-            # same chat object is unreliable. Start a completely fresh chat with
-            # the full original prompt instead.
-            if 'STOP' not in finish_reason:
-                print("[MATCHMAKER] Retrying once with a fresh chat session due to non-STOP finish_reason with no booking...")
-                retry_chat = ai_client.chats.create(
-                    model="gemini-2.5-flash",
-                    config=types.GenerateContentConfig(
-                        system_instruction=agent_instructions,
-                        tools=[book_interview_in_db, create_meet_link, generate_feedback_link, generate_candidate_review_link, send_email_tool],
-                        temperature=0.1
-                    )
-                )
-                agent_response = retry_chat.send_message(prompt)
-                response_text = agent_response.text or ""
-                finish_reason = str(agent_response.candidates[0].finish_reason) if agent_response.candidates else 'N/A'
-                print(f"[MATCHMAKER] Retry response text: {response_text!r}")
-                print(f"[MATCHMAKER] Retry finish reason: {finish_reason}")
+            return ({"success": True, "matchSuccess": False, "message": "Booking failed. Manual assignment required.", "bookingResult": booking_result}, 200, headers)
 
-                verify_rows = list(bq_client.query(verify_query, job_config=bigquery.QueryJobConfig(
-                    query_parameters=[
-                        bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
-                        bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
-                        bigquery.ScalarQueryParameter("round", "STRING", interview_round),
-                    ]
-                )))
-                booking_confirmed = bool(verify_rows and verify_rows[0].interviewer_id)
-                print(f"[MATCHMAKER] Booking confirmed in DB after retry: {booking_confirmed}")
+        # ── STEP 3: MEET LINK — plain Python ──
+        meet_link = create_meet_link(
+            slot_date=actual_date,
+            slot_start_time=matched_start_time,
+            job_title=job_title,
+            round_label=ROUND_LABELS.get(interview_round, interview_round),
+            duration_mins=ROUND_DURATIONS.get(interview_round, 45),
+        )
+        print(f"[MATCHMAKER] Meet link: {meet_link}")
 
-        if not booking_confirmed:
-            return ({"success": True, "matchSuccess": False, "message": "No match found or booking failed. Manual assignment required.", "agentLog": response_text, "finishReason": str(finish_reason)}, 200, headers)
+        # ── STEP 4/6: LINKS — plain Python ──
+        feedback_link = generate_feedback_link(
+            candidate_id=candidate_id, job_id=job_id, round_id=interview_round,
+            candidate_name=candidate_name, job_title=job_title
+        )
+        review_link = generate_candidate_review_link(
+            candidate_id=candidate_id, job_id=job_id, round_id=interview_round,
+            candidate_name=candidate_name, job_title=job_title
+        )
 
+        # ── STEP 5: EMAILS — plain Python, deterministic field-filling, no AI ──
+        mode_label = "Online (Virtual)" if matched_work_mode == "WFH" else "In-Person (Office)"
+        common_fields = {
+            "candidate_name": candidate_name,
+            "interviewer_name": matched_interviewer_name,
+            "job_title": job_title,
+            "round": ROUND_LABELS.get(interview_round, interview_round),
+            "date": format_date_human(actual_date),
+            "time": format_time_range(matched_start_time, matched_end_time),
+            "mode": mode_label,
+            "meet_link": meet_link,
+        }
+
+        candidate_html = fill_template(CANDIDATE_EMAIL_TEMPLATE, common_fields)
+        interviewer_html = fill_template(INTERVIEWER_EMAIL_TEMPLATE, {**common_fields, "feedback_link": feedback_link, "review_link": review_link})
+
+        candidate_email_sent = send_email(
+            to_email=candidate_email,
+            subject=f"Interview Scheduled — {job_title}",
+            html_body=candidate_html,
+        )
+        interviewer_email_sent = send_email(
+            to_email=matched_interviewer_email,
+            subject=f"Interview Assignment — {job_title}",
+            html_body=interviewer_html,
+        )
+
+        print(f"[MATCHMAKER] candidate_email_sent={candidate_email_sent}, interviewer_email_sent={interviewer_email_sent}")
+
+        if not (candidate_email_sent and interviewer_email_sent):
+            print(f"[MATCHMAKER] WARNING: booking succeeded but emails incomplete: candidate={candidate_email_sent}, interviewer={interviewer_email_sent}")
+
+        # ── Release any leftover on_hold slots for this job/round ──
         try:
             release_query = f"""
                 UPDATE `{project_id}.{dataset_id}.interviewer_slots`
@@ -328,7 +373,12 @@ def auto_matchmaker(request):
         except Exception as release_err:
             print(f"[MATCHMAKER] Failed to release on_hold slots: {release_err}")
 
-        return ({"success": True, "matchSuccess": True, "message": "Successfully matched, booked, and emailed.", "agentLog": response_text}, 200, headers)
+        return ({
+            "success": True,
+            "matchSuccess": True,
+            "message": "Successfully matched, booked, and emailed.",
+            "emailStatus": {"candidate": candidate_email_sent, "interviewer": interviewer_email_sent},
+        }, 200, headers)
 
     except Exception as e:
         print(f"[MATCHMAKER] Error: {e}")

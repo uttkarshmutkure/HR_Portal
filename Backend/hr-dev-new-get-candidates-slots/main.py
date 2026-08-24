@@ -38,6 +38,8 @@ def get_candidate_slots(request):
         interview_round = request_json.get("round", "round1")
         limit           = int(request_json.get("limit", 3))
 
+        mode = request_json.get("mode", "auto")  # "auto" (default) or "manual"
+
         if not job_id or not candidate_id:
             return ({"error": "Missing jobId or candidateId"}, 400, headers)
 
@@ -46,34 +48,88 @@ def get_candidate_slots(request):
         slots_table      = f"{project_id}.{dataset_id}.interviewer_slots"
         selections_table = f"{project_id}.{dataset_id}.candidate_slot_selections"
 
-        # ── STEP 1: Check if slots were already offered to this candidate ──
-        check_query = f"""
-            SELECT slots_offered
-            FROM `{selections_table}`
-            WHERE job_id = @job_id
-              AND candidate_id = @candidate_id
-              AND round = @round
-              AND slots_offered IS NOT NULL
-            LIMIT 1
-        """
-        check_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
-                bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
-                bigquery.ScalarQueryParameter("round", "STRING", interview_round),
-            ]
-        )
-        existing = list(bq_client.query(check_query, job_config=check_config).result())
-
-        if existing and existing[0].slots_offered:
-            offered = existing[0].slots_offered
-            if isinstance(offered, str):
-                offered = json.loads(offered)
-            return (
-                {"success": True, "slots": offered},
-                200,
-                headers,
+                # ── STEP 1: Check if slots were already offered to this candidate ──
+        # (Skipped in manual mode — HR always wants a fresh, live list of free slots)
+        # ── Manual mode: release this candidate's previously-held slots back to 'free' ──
+        if mode == "manual":
+            prev_query = f"""
+                SELECT slots_offered
+                FROM `{selections_table}`
+                WHERE job_id = @job_id
+                  AND candidate_id = @candidate_id
+                  AND round = @round
+                  AND slots_offered IS NOT NULL
+                LIMIT 1
+            """
+            prev_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                    bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
+                    bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                ]
             )
+            prev_rows = list(bq_client.query(prev_query, job_config=prev_config).result())
+
+            if prev_rows and prev_rows[0].slots_offered:
+                prev_offered = prev_rows[0].slots_offered
+                if isinstance(prev_offered, str):
+                    prev_offered = json.loads(prev_offered)
+
+                if prev_offered:
+                    release_conditions = []
+                    release_params = [
+                        bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                        bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                    ]
+                    for i, s in enumerate(prev_offered):
+                        release_conditions.append(
+                            f"(day = @day_{i} AND start_time = @start_{i} AND end_time = @end_{i})"
+                        )
+                        release_params.append(bigquery.ScalarQueryParameter(f"day_{i}", "STRING", s.get("day", "")))
+                        release_params.append(bigquery.ScalarQueryParameter(f"start_{i}", "STRING", s.get("start_time", "")))
+                        release_params.append(bigquery.ScalarQueryParameter(f"end_{i}", "STRING", s.get("end_time", "")))
+
+                    release_query = f"""
+                        UPDATE `{slots_table}`
+                        SET status = 'free'
+                        WHERE job_id = @job_id
+                          AND `round` = @round
+                          AND status = 'on_hold'
+                          AND ({' OR '.join(release_conditions)})
+                    """
+                    release_config = bigquery.QueryJobConfig(query_parameters=release_params)
+                    bq_client.query(release_query, job_config=release_config).result()
+                    print(f"[MANUAL MODE] Released {len(prev_offered)} held slot(s) back to free for candidate {candidate_id}")
+
+        if mode != "manual":
+            check_query = f"""
+                SELECT slots_offered
+                FROM `{selections_table}`
+                WHERE job_id = @job_id
+                  AND candidate_id = @candidate_id
+                  AND round = @round
+                  AND slots_offered IS NOT NULL
+                LIMIT 1
+            """
+            check_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+                    bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
+                    bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                ]
+            )
+            existing = list(bq_client.query(check_query, job_config=check_config).result())
+
+            if existing and existing[0].slots_offered:
+                offered = existing[0].slots_offered
+                if isinstance(offered, str):
+                    offered = json.loads(offered)
+                return (
+                    {"success": True, "slots": offered},
+                    200,
+                    headers,
+                )
+
         # ── STEP 2: First time — fetch fresh free slots ──
         query = f"""
             SELECT
@@ -118,6 +174,19 @@ def get_candidate_slots(request):
                 seen.add(key)
                 unique_slots.append(s)
 
+        # ── Manual mode: HR sees ALL free slots, nothing is held or persisted ──
+        if mode == "manual":
+            result_slots = [
+                {
+                    "day": s["day"],
+                    "start_time": s["start_time"],
+                    "end_time": s["end_time"],
+                    "work_mode": s["work_mode"],
+                }
+                for s in unique_slots
+            ]
+            return ({"success": True, "slots": result_slots}, 200, headers)
+        
         top_slots = unique_slots[:limit]
 
         # ── For round1 only: ensure work-mode diversity in the top 3 ──
@@ -162,19 +231,21 @@ def get_candidate_slots(request):
         # ── STEP 4: Persist the offer so future page loads reuse the SAME slots ──
         upsert_query = f"""
             MERGE `{selections_table}` T
-            USING (SELECT @job_id AS job_id, @candidate_id AS candidate_id, @round AS round) S
+            USING (SELECT @job_id AS job_id, @candidate_id AS candidate_id, @round AS round, @slot_id AS slot_id) S
             ON T.job_id = S.job_id AND T.candidate_id = S.candidate_id AND T.round = S.round
             WHEN MATCHED THEN
                 UPDATE SET slots_offered = @slots_offered
             WHEN NOT MATCHED THEN
                 INSERT (slot_id, candidate_id, job_id, round, slots_offered, status)
-                VALUES (@candidate_id, @candidate_id, @job_id, @round, @slots_offered, 'offered')
+                VALUES (S.slot_id, @candidate_id, @job_id, @round, @slots_offered, 'invited')
         """
+
         upsert_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
                 bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
                 bigquery.ScalarQueryParameter("round", "STRING", interview_round),
+                bigquery.ScalarQueryParameter("slot_id", "STRING", f"{candidate_id}_{interview_round}"),
                 bigquery.ScalarQueryParameter("slots_offered", "JSON", json.dumps(result_slots)),
             ]
         )

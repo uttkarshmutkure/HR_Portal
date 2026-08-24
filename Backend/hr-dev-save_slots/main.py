@@ -219,7 +219,7 @@ def save_candidate_slots(request):
                 """
 
                 insert_cfg = bigquery.QueryJobConfig(query_parameters=[
-                    bigquery.ScalarQueryParameter("slot_id",           "STRING",    candidate_id),
+                    bigquery.ScalarQueryParameter("slot_id",           "STRING",    f"{candidate_id}_{interview_round}"),
                     bigquery.ScalarQueryParameter("candidate_id",      "STRING",    candidate_id),
                     bigquery.ScalarQueryParameter("job_id",            "STRING",    job_id),
                     bigquery.ScalarQueryParameter("candidate_name",    "STRING",    request_json.get('candidateName', '')),

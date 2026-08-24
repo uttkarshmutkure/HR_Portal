@@ -11,8 +11,9 @@ export interface FeedbackTokenPayload {
   round:        InterviewRound;
   candidateName: string;
   jobTitle:     string;
-  skills:       string[];   // must_have_skills pulled from job
-  exp:          number;     // Date.now() + 7 days
+  skills?:      string[];  // must_have_skills pulled from job
+  exp:          number;     // Date.now() + 7 days// add this
+  candidateEmail?: string;  // add this
 }
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;

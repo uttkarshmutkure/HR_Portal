@@ -7,7 +7,7 @@ import CandidateDetailPage     from "./pages/CandidateDetailPage";
 import ShortlistedPage         from "./pages/ShortlistedPage";
 import InterviewPipelinePage   from "./pages/InterviewPipelinePage";
 import CandidateTimelinePage   from "./pages/CandidateTimelinePage";
-import FeedbackFormPage        from "./pages/FeedbackFormPage";
+import FeedbackFormPage        from "./pages/Feedbackformpage";
 import CandidateSlotPage       from "./pages/Candidateslotpage";
 import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IMPORT
 import LoginPage               from "./pages/LoginPage";
@@ -133,7 +133,13 @@ export const router = createBrowserRouter([
     path: "/feedback/:token",
     Component: FeedbackFormPage,
   },
-  
+
+  // ── Public candidate review link (no auth) — reuses the same feedback form ──
+  {
+    path: "/candidate-review/:token",
+    Component: FeedbackFormPage,
+  },
+
   // ── Public slot selection link (no auth) ──
   {
     path: "/schedule/:token",
