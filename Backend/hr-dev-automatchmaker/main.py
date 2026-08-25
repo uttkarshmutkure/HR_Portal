@@ -21,7 +21,7 @@ test_email = os.environ.get('TEST_EMAIL', 'mutkureu@gmail.com')
 ai_client = genai.Client(
     vertexai=True,
     project=os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev'),
-    location='asia-south1'
+    location='global'
 )
 
 ROUND_DURATIONS = {'round1': 30, 'technical': 60, 'hr': 30}
@@ -237,7 +237,7 @@ def auto_matchmaker(request):
         """
 
         response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=match_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,

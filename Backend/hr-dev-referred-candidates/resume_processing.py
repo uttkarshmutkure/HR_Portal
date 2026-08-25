@@ -32,7 +32,8 @@ BUCKET_NAME     = "hr-data-source-at"
 FOLDER_PATH     = "resume/Python_Developers"
 DATASET_ID      = "hr_dataset"
 TABLE_ID        = "candidates"
-LOCATION        = "us-central1"
+GEMINI_LOCATION    = "global"
+EMBEDDING_LOCATION = "us-central1"
 JOB_ID          = "job-002"
 
 MAX_WORKERS     = 10   # parallel resume threads
@@ -46,12 +47,12 @@ BQ_BATCH_SIZE   = 50   # rows to accumulate before flushing to BigQuery
 
 gcs_client      = storage.Client(project=PROJECT_ID)
 bq_client       = bigquery.Client(project=PROJECT_ID)
-vertexai.init(project=PROJECT_ID, location=LOCATION)
+vertexai.init(project=PROJECT_ID, location=EMBEDDING_LOCATION)
 embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
 gemini_client   = genai.Client(
     vertexai = True,
     project  = PROJECT_ID,
-    location = LOCATION,
+    location = GEMINI_LOCATION,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,7 +179,7 @@ Return exactly this JSON structure:
     for attempt in range(1, retries + 1):
         try:
             response = gemini_client.models.generate_content(
-                model    = "gemini-2.5-flash",
+                model    = "gemini-3.5-flash",
                 contents = prompt,
             )
             raw    = response.text.strip().replace("```json", "").replace("```", "").strip()

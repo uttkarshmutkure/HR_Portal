@@ -31,11 +31,11 @@ PROJECT_ID  = "atgeir-moae-dev"
 DATASET_ID  = "hr_dataset"
 TABLE_ID    = "candidates"
 BUCKET_NAME = "hr-data-source-at"
-REGION      = "us-central1"
+REGION      = "global"
 
 # Initialize Vertex AI globally for warm container reuse
 vertexai.init(project=PROJECT_ID, location=REGION)
-ai_model = GenerativeModel("gemini-2.5-flash")
+ai_model = GenerativeModel("gemini-3.5-flash")
 
 # ── CLIENTS ───────────────────────────────────────────────────────────────────
 

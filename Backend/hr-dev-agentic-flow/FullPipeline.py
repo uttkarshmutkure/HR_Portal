@@ -50,7 +50,7 @@ from google import genai
 
 PROJECT_ID     = os.environ.get("GOOGLE_CLOUD_PROJECT",  "atgeir-moae-dev")
 DATASET_ID     = os.environ.get("BQ_DATASET_ID",         "hr_dataset")
-LOCATION       = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+LOCATION       = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 HIRING_COMPANY = os.environ.get("HIRING_COMPANY",        "Atgeir Solutions")
 
 # Email — store these as Secret Manager secrets in production
@@ -86,7 +86,7 @@ def llm_generate(prompt: str, retries: int = 3, backoff: float = 5.0) -> str:
     for attempt in range(1, retries + 1):
         try:
             response = gemini_client.models.generate_content(
-                model    = "gemini-2.5-flash",
+                model    = "gemini-3.5-flash",
                 contents = prompt,
             )
             return response.text.strip()

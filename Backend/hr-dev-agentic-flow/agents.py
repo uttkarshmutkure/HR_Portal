@@ -2,6 +2,12 @@
 
 from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
+import os
+
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+os.environ["GOOGLE_CLOUD_PROJECT"] = "atgeir-moae-dev"
+os.environ["GOOGLE_CLOUD_LOCATION"] = "global"
+
 from tools import (
     process_jd_tool,
     process_resume_tool,
@@ -10,7 +16,7 @@ from tools import (
 
 # Matches the working chat_agent.py pattern exactly:
 # LlmAgent + Gemini() — auth via GOOGLE_GENAI_USE_VERTEXAI=1 env var
-_MODEL = Gemini(model="gemini-2.5-flash")
+_MODEL = Gemini(model="gemini-3.5-flash")
 
 jd_agent = LlmAgent(
     name="jd_agent",

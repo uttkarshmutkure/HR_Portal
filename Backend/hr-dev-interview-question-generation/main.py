@@ -12,7 +12,7 @@ bq_client = bigquery.Client()
 ai_client = genai.Client(
     vertexai=True,
     project=os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev'),
-    location='asia-south1'
+    location='global'
 )
 
 project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
@@ -177,7 +177,7 @@ def generate_questions(request):
 
         def call_gemini(system_instr, schema, extra_prompt=""):
             chat = ai_client.chats.create(
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash",
                 config=types.GenerateContentConfig(
                     system_instruction=system_instr,
                     temperature=0.4,

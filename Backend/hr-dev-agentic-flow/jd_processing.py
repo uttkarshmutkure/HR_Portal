@@ -27,7 +27,8 @@ BUCKET_NAME     = "hr-data-source-at"
 FOLDER_PATH     = "jd"
 DATASET_ID      = "hr_dataset"
 TABLE_ID        = "jobs"
-LOCATION        = "us-central1"
+GEMINI_LOCATION    = "global"
+EMBEDDING_LOCATION = "us-central1"
 
 MAX_WORKERS     = 5    # JD volume is usually lower than resumes
 BQ_BATCH_SIZE   = 20
@@ -39,12 +40,13 @@ BQ_BATCH_SIZE   = 20
 
 gcs_client      = storage.Client(project=PROJECT_ID)
 bq_client       = bigquery.Client(project=PROJECT_ID)
-vertexai.init(project=PROJECT_ID, location=LOCATION)
+vertexai.init(project=PROJECT_ID, location=EMBEDDING_LOCATION)
 embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+
 gemini_client   = genai.Client(
     vertexai = True,
     project  = PROJECT_ID,
-    location = LOCATION,
+    location = GEMINI_LOCATION,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,7 +110,7 @@ Expected output format:
 }}
 """
     response = gemini_client.models.generate_content(
-        model    = "gemini-2.5-flash",
+        model    = "gemini-3.5-flash",
         contents = prompt,
     )
     raw    = response.text.strip().replace("```json", "").replace("```", "").strip()

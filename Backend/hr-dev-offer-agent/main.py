@@ -3,11 +3,11 @@ import json
 import asyncio
 import requests
 
-# ── Must be set BEFORE any ADK/genai imports ─────────────────────────────────
+# ── Must be set BEFORE any ADK/genai imports ───────────────────────os.environ["GOOGLE_CLOUD_LOCATION"]     = "global"──────────
 # ADK reads these env vars at import time to decide Vertex AI vs Gemini API.
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
 os.environ["GOOGLE_CLOUD_PROJECT"]      = os.environ.get("GOOGLE_CLOUD_PROJECT", "atgeir-moae-dev")
-os.environ["GOOGLE_CLOUD_LOCATION"]     = "asia-south1"
+os.environ["GOOGLE_CLOUD_LOCATION"]     = "global"
 
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +28,7 @@ dataset_id    = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
 email_api_url = os.environ.get('EMAIL_API_URL', 'https://wb-gateway-7xpbhfkr.an.gateway.dev/hr-screening/send-email')
 test_email    = os.environ.get('TEST_EMAIL', '')
 
-MODEL    = "gemini-2.5-flash"
+MODEL    = "gemini-3.5-flash"
 APP_NAME = "offer_agent_app"
 
 # ── Shared session service ────────────────────────────────────────────────────
