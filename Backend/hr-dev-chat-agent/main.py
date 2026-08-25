@@ -38,35 +38,40 @@ ENUM_CACHE_TTL_SEC = 6 * 60 * 60  # 6 hours
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCHEMA = {
-            "candidates": {
-        "columns": [
-            "candidate_id", "job_id", "name", "email", "phone", "location",
-            "last_organization", "minimum_qualification", "total_experience_years",
-            "skills", "applied_at", "screening_status", "candidate_result",
-            "ai_screening_results", "reject_reason",
-        ],
-        "notes": (
+        "candidates": {
+            "columns": [
+                "candidate_id", "job_id", "name", "email", "phone", "location",
+                "last_organization", "minimum_qualification", "total_experience_years",
+                "skills", "applied_at", "screening_status", "candidate_result",
+                "reject_reason",
+            ],
+                "notes": (
             "One row per candidate application. Join to jobs via job_id. "
             "'Screened' / 'has been screened' means screening_status = 'COMPLETED' (regardless of "
             "eventual outcome). "
             "candidate_result is the PIPELINE STAGE a screened candidate has reached, with these "
             "exact meanings — use them precisely, this is a business definition, not a guess: "
-            "'Archive' = rejected/eliminated after screening. "
+            "'Archive' = FAILED/eliminated AT THE INITIAL AI SCREENING STAGE (before ever being "
+            "shortlisted) — this is what 'failed candidates' / 'failed screening' means. "
+            "'Rejected' = a DIFFERENT, LATER stage — the candidate WAS shortlisted/progressed, but "
+            "was rejected AFTER the shortlist process (e.g. during/after interviews or human "
+            "review). This is what 'rejected candidates' means — NEVER use 'Archive' for this. "
             "'Human Review' = pending manual review, outcome not yet decided. "
             "'Passed' = passed AI screening, awaiting the shortlisting decision. "
             "'Shortlisted' = shortlisted but not yet moved into the interview pipeline. "
-            "'Interview' = shortlisted AND already moved into interviews (a later, further-along "
-            "stage than 'Shortlisted', not a separate/unrelated status). "
+            "'Interview' = shortlisted AND already moved into interviews (further along than "
+            "'Shortlisted', not a separate/unrelated status). "
             "THEREFORE: 'shortlisted candidates' (broad, common usage) means candidate_result IN "
             "('Shortlisted', 'Interview') — both are shortlisted, one has simply progressed further. "
             "'candidates in interview' / 'interview stage' specifically means candidate_result = "
             "'Interview' only. "
             "'passed candidates' (from screening) means candidate_result = 'Passed' specifically. "
-            "'rejected' is AMBIGUOUS between two different stages — if the user's question gives no "
-            "stage context, default to candidate_result = 'Archive' (rejected at/after screening); "
-            "but if the question mentions an interview round, use interview_feedback.verdict = "
-            "'reject' instead (rejected during/after an interview) — these are different candidates "
-            "and different tables, do not conflate them."
+            "'failed candidates' / 'failed screening' means candidate_result = 'Archive' ONLY. "
+            "'rejected candidates' means candidate_result = 'Rejected' ONLY — do not confuse with "
+            "'Archive', they are different stages with different meanings, per above. "
+            "If the user's question is about rejection during/after a specific interview round "
+            "rather than the overall pipeline stage, use interview_feedback.verdict = 'reject' "
+            "instead (a different table, scoped to one round) — do not conflate the two."
         ),
     },
     "jobs": {
@@ -103,21 +108,28 @@ SCHEMA = {
             "'Round 1/2/HR Round' phrasing maps to these stored values."
         ),
     },
-    "candidate_slot_selections": {
+        "candidate_slot_selections": {
         "columns": [
             "slot_id", "candidate_id", "job_id", "candidate_name", "candidate_email",
             "round", "status", "email_sent_at", "confirmed_at", "created_at",
             "slot_date", "slot_start_time", "slot_end_time", "interviewer_id",
             "interviewer_name", "interviewer_email", "job_title", "interview_mode",
         ],
-        "notes": (
-            "One row PER ROUND per candidate — a new row is added the moment a candidate is "
-            "invited to a round, even before any interview happens or feedback exists. This is "
-            "THE SOURCE OF TRUTH for 'what round is candidate X currently in' — a candidate's "
-            "current round is whichever round has their MOST RECENT row here (by created_at), "
-            "not interview_feedback (which only has rows for interviews that were actually "
-            "completed and reviewed). round stores 'round1'/'technical'/'hr' — HR says "
-            "'Round 1'=round1, 'Round 2'/'technical round'=technical, 'HR round'/'final round'=hr."
+            "notes": (
+            "One row PER ROUND-INVITE per candidate. round stores 'round1'/'technical'/'hr' — HR "
+            "says 'Round 1'=round1, 'Round 2'/'technical round'=technical, 'HR round'=hr. "
+            "IMPORTANT — advancing does NOT immediately create a new row for the next round: when a "
+            "candidate passes round1, their EXISTING round1 row simply gets status flipped to "
+            "'advanced' — a new row with round='technical' only appears later, once they're actually "
+            "invited to that next round. This means round+status TOGETHER indicate pipeline stage, "
+            "not round alone. See RULES section for the exact, verified round+status combination for "
+            "each pipeline stage (Round 1 / Round 2 / HR Round / Onboarding) — use those patterns "
+            "precisely rather than inferring your own. "
+            "STATUS progression per row: 'invited' (emailed, no slot picked yet — 'awaiting "
+            "response'/'yet to respond') → 'scheduled' (picked a time, interview not yet done — "
+            "'scheduled'/'upcoming'/'booked') → 'advanced' (interviewer submitted feedback, "
+            "candidate passed this round and is now considered to be at the NEXT stage, per the "
+            "RULES mapping)."
         ),
     },
     "interviewer_slots": {
@@ -260,23 +272,43 @@ RULES:
 6. Always include a LIMIT clause (100 or fewer, unless the user clearly wants a count/aggregate).
 7. Use JOINs on job_id / candidate_id where the question spans multiple tables (e.g. candidate name + interview verdict).
 8. Prefer aggregate queries (COUNT, AVG, etc.) when the user asks "how many" / "average" rather than returning raw rows.
-9. CURRENT-ROUND QUERIES: whenever the user asks "who is in round X" / "round X candidates" /
-   "candidates currently at HR round" etc., use candidate_slot_selections (NOT interview_feedback —
-   that table only has rows for completed/reviewed interviews and misses candidates still awaiting
-   response). Rank rounds (round1=1, technical=2, hr=3), take each candidate's MOST RECENT row by
-   created_at, and keep only candidates whose most recent round equals the requested round. Use this
-   pattern:
+9. PIPELINE-STAGE QUERIES: use candidate_slot_selections (NOT interview_feedback — that table only
+   has rows for completed/reviewed interviews and misses candidates still awaiting response).
 
-   WITH ranked AS (
-     SELECT candidate_id, job_id, round, created_at,
+   A candidate can have MULTIPLE rows over time (one per round they've been invited to), but only
+   their MOST RECENT row (by created_at) reflects their TRUE current stage — older rows, even ones
+   with status='advanced', are history, not current state. ALWAYS start with this CTE to get each
+   candidate's single most-recent row before applying any round/status filter:
+
+    WITH current_row AS (
+     SELECT candidate_id, job_id, candidate_name, candidate_email, round, status,
+       interviewer_name, interviewer_email, job_title, created_at,
        ROW_NUMBER() OVER (PARTITION BY candidate_id, job_id ORDER BY created_at DESC) AS rn
      FROM `{project_id}.{dataset_id}.candidate_slot_selections`
    )
-   SELECT candidate_id, job_id FROM ranked
-   WHERE rn = 1 AND LOWER(round) = LOWER('<target_round>')
 
-   Join this back to candidates for names/emails as needed. Only use interview_feedback instead if
-   the user specifically asks about feedback, verdicts, ratings, or completed interviews.
+   Then, from current_row WHERE rn = 1, this is the EXACT, VERIFIED mapping of that most-recent
+   row's (round, status) to the candidate's actual current pipeline stage:
+
+   - "Round 1 candidates": round='round1' AND status IN ('invited','scheduled')
+   - "Round 2" / "technical round" candidates: round='round1' AND status='advanced'
+     OR round='technical' AND status IN ('invited','scheduled')
+   - "HR round" candidates: round='technical' AND status='advanced'
+     OR round='hr' AND status IN ('invited','scheduled')
+   - "Onboarding" candidates: round='hr' AND status='advanced'
+
+   Example for "round 2 candidates":
+   SELECT candidate_id, job_id, candidate_name, candidate_email FROM current_row
+   WHERE rn = 1 AND (
+     (LOWER(round) = 'round1' AND LOWER(status) = 'advanced') OR
+     (LOWER(round) = 'technical' AND LOWER(status) IN ('invited','scheduled'))
+   )
+
+   This guarantees each candidate appears in EXACTLY ONE stage at a time — never two — since it's
+   always evaluated against their single most-recent row only.
+
+   Join back to candidates/jobs for extra fields as needed. Only use interview_feedback instead if
+   the user specifically asks about feedback content, ratings, or interviewer comments.
 10. For fixed/categorical values (statuses, verdicts, rounds — anything listed in "actual stored values"), match case-insensitively with LOWER(column) = LOWER('value').
 
 11. If a column's "actual stored values" list is shown above, pick the closest matching value(s) from that real list rather than inventing one.
