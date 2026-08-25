@@ -467,17 +467,17 @@ def handle_candidate_data(request):
                 return (json.dumps({'error': 'Missing jobId'}), 400, headers)
 
             query = f"""
-                SELECT
-                    candidate_id,
-                    name,
-                    email,
-                    phone,
-                    candidate_result,
-                    ai_screening_results
-                FROM `{project_id}.{dataset_id}.candidates`
-                WHERE job_id = @job_id
-                    AND candidate_result IN ('Shortlisted', 'Referred', 'Interview', 'Selected', 'Hired', 'Rejected')
-            """
+                    SELECT
+                        candidate_id,
+                        name,
+                        email,
+                        phone,
+                        candidate_result,
+                        ai_screening_results
+                    FROM `{project_id}.{dataset_id}.candidates`
+                    WHERE job_id = @job_id
+                        AND candidate_result IN ('Shortlisted', 'Referred', 'Interview', 'Selected', 'Hired')
+                """
             params = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
             rows = list(bq_client.query(
                 query,

@@ -859,6 +859,7 @@ function OfferChatPanel({
       if (!saveData.savedToDB) {
         throw new Error('Offer agent ran but did not confirm the save.');
       }
+      onSaveOfferLocal(draft);
 
       onSetTyping(false);
       showToast?.(`Offer sent to ${cand.name}!`, 'success');
@@ -1024,14 +1025,32 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
   return (
     <div style={{
       background: '#fff', color: '#1F2937', fontFamily: 'Arial, sans-serif',
-      fontSize: 13, lineHeight: 1.8, padding: '56px 64px',
+      fontSize: 13, lineHeight: 1.8,
       maxWidth: 700, margin: '0 auto',
       boxShadow: '0 4px 24px rgba(0,0,0,0.09)', borderRadius: 2,
+      overflow: 'hidden',
     }}>
-      <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, letterSpacing: '0.1em', marginBottom: 36, textDecoration: 'underline' }}>
-        OFFER LETTER
+      {/* ── Letterhead ── */}
+      <div style={{ padding: '18px 40px 0' }}>
+        <img
+          src="/company-logo.png"
+          alt="Atgeir Solutions"
+          style={{ height: 34, objectFit: 'contain' }}
+        />
       </div>
-      <div style={{ textAlign: 'right', marginBottom: 24, fontSize: 12 }}>Date:&nbsp;{todayStr}</div>
+      <div style={{ display: 'flex', height: 10, marginTop: 10 }}>
+        <div style={{ width: 70, background: '#1E1B4B' }} />
+        <div style={{ flex: 1, background: '#F07C2D' }} />
+      </div>
+
+      <div style={{ padding: '32px 64px 56px' }}>
+        <div style={{ textAlign: 'right', marginBottom: 8, fontSize: 12 }}>
+          Ref No:&nbsp;{draft.refNo || `ATG/EMP/OL`}<br />
+          Date:&nbsp;{todayStr}
+        </div>
+        <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 15, letterSpacing: '0.05em', marginBottom: 32, textDecoration: 'underline' }}>
+          {draft.designation || jdTitle || 'Offer Letter'}{draft.designation || jdTitle ? ' - Offer Letter' : ''}
+        </div>
       <div style={{ marginBottom: 24, fontSize: 13 }}>
         <div>To</div>
         <div style={{ marginLeft: 24 }}>
@@ -1186,6 +1205,19 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
             <p style={{ fontSize: 11, color: TEXT_MID, marginTop: 10 }}>* The components can vary depending on the company and the way it would want to structure the salary.</p>
           </>
         )}
+      </div>
+      </div>
+
+      {/* ── Footer ── */}
+      <div style={{ fontSize: 10, color: TEXT_MID, padding: '0 64px 8px' }}>Confidential &amp; Proprietary Information</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 40px', fontSize: 11, color: '#1F2937' }}>
+        <span>📍</span>
+        <span>Office #501, Wing A, Orville Business Port, Viman Nagar, Lohegaon, Pune Maharashtra – 411014</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1E1B4B', color: '#fff', fontSize: 11, padding: '10px 40px' }}>
+        <span>✉️&nbsp; info@atgeirsolutions.com</span>
+        <span>🌐&nbsp; www.atgeirsolutions.com</span>
+        <span>CIN: U72502PN2021PTC201427</span>
       </div>
     </div>
   );
