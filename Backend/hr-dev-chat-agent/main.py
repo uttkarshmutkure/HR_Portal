@@ -22,7 +22,7 @@ genai_client = genai.Client()
 project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
 dataset_id = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.5-flash"
 
 MAX_RESULT_ROWS = 200          # hard cap on rows pulled back from BigQuery
 QUERY_TIMEOUT_SEC = 20
