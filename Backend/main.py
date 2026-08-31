@@ -14,6 +14,8 @@ from routers.send_email import router as send_email_router
 from routers.offer_agent import router as offer_agent_router
 from routers.save_candidate_slots import router as save_candidate_slots_router
 from routers.automatchmaker import router as automatchmaker_router
+from routers.agentic_flow import router as agentic_flow_router
+from routers.refer_candidate import router as refer_candidate_router
 
 app = FastAPI(title="Atgeir HireDesk Backend")
 
@@ -31,6 +33,8 @@ app.include_router(send_email_router)
 app.include_router(offer_agent_router)
 app.include_router(save_candidate_slots_router)
 app.include_router(automatchmaker_router)
+app.include_router(agentic_flow_router)
+app.include_router(refer_candidate_router)
 
 @app.get("/healthz")
 def healthz():

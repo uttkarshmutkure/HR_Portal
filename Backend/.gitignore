@@ -1,3 +1,5 @@
+.env
+*.json
+!package.json
 .venv/
-atgeir-moae-dev-cfbe2c998d27.json
-test_resume.pdf
+__pycache__/
