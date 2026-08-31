@@ -7,8 +7,8 @@ import CandidateDetailPage     from "./pages/CandidateDetailPage";
 import ShortlistedPage         from "./pages/ShortlistedPage";
 import InterviewPipelinePage   from "./pages/InterviewPipelinePage";
 import CandidateTimelinePage   from "./pages/CandidateTimelinePage";
-import FeedbackFormPage        from "./pages/Feedbackformpage";
-import CandidateSlotPage       from "./pages/Candidateslotpage";
+import FeedbackFormPage        from "./pages/FeedbackFormPage";
+import CandidateSlotPage       from "./pages/CandidateSlotPage";
 import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IMPORT
 import LoginPage               from "./pages/LoginPage";
 import ProtectedRoute          from "./components/ProtectedRoute";
