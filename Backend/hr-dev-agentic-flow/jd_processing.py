@@ -32,7 +32,6 @@ EMBEDDING_LOCATION = "us-central1"
 
 MAX_WORKERS     = 5    # JD volume is usually lower than resumes
 BQ_BATCH_SIZE   = 20
-
 # ─────────────────────────────────────────────────────────────────────────────
 
 

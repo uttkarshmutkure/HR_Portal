@@ -10,6 +10,7 @@ Key optimizations vs original:
   6. process_resume_from_gcs no longer mutates a global (thread-safe rewrite)
 """
 
+import hashlib
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,27 @@ gemini_client   = genai.Client(
     location = GEMINI_LOCATION,
 )
 
+def _update_status(job_id: str, file_name: str, step: str, error: str = None):
+    query = f"""
+        MERGE `{PROJECT_ID}.{DATASET_ID}.resume_status` AS target
+        USING (SELECT @job_id AS job_id, @file_name AS file_name) AS source
+        ON target.job_id = source.job_id AND target.file_name = source.file_name
+        WHEN MATCHED THEN
+          UPDATE SET step = @step, error = @error, updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN
+          INSERT (job_id, file_name, step, error, updated_at)
+          VALUES (@job_id, @file_name, @step, @error, CURRENT_TIMESTAMP())
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+            bigquery.ScalarQueryParameter("file_name", "STRING", file_name),
+            bigquery.ScalarQueryParameter("step", "STRING", step),
+            bigquery.ScalarQueryParameter("error", "STRING", error or ""),
+        ]
+    )
+    bq_client.query(query, job_config=job_config).result()
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -76,13 +98,14 @@ def list_pdfs_in_folder(bucket_name: str = BUCKET_NAME,
 # ── STEP 2: Extract text (unchanged — already fast) ───────────────────────────
 
 def extract_text_from_pdf(file_name: str,
-                           bucket_name: str = BUCKET_NAME) -> str:
+                           bucket_name: str = BUCKET_NAME) -> tuple[str, str]:
     bucket    = gcs_client.bucket(bucket_name)
     pdf_bytes = bucket.blob(file_name).download_as_bytes()
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
     doc       = fitz.open(stream=pdf_bytes, filetype="pdf")
     text      = "".join(page.get_text() for page in doc)
     doc.close()
-    return text.strip()
+    return text.strip(), file_hash
 
 
 # ── STEP 3: Gemini field extraction (unchanged prompt, same model) ────────────
@@ -300,7 +323,7 @@ def flush_to_bigquery(rows: list[dict]) -> None:
 def build_bq_row(
     job_id, name, email, phone, location, last_organization,
     minimum_qualification, total_experience_years, skills,
-    raw_resume_text, embedding, gcs_pdf_path,
+    raw_resume_text, embedding, gcs_pdf_path, file_hash,
 ) -> dict:
     return {
         "candidate_id":           str(uuid.uuid4()),
@@ -316,6 +339,7 @@ def build_bq_row(
         "raw_resume_text":        raw_resume_text,
         "resume_embedding":       embedding,
         "gcs_pdf_path":           gcs_pdf_path,
+        "file_hash":              file_hash,
         "applied_at":             datetime.now(timezone.utc).isoformat(),
         "screening_status":       "PENDING",
         "candidate_result":       "Not Screened",
@@ -336,7 +360,7 @@ def _process_resume_to_row(
     """
     current_date = datetime.now().strftime("%Y-%m")
     try:
-        raw_text = extract_text_from_pdf(file_name, bucket_name)
+        raw_text, file_hash = extract_text_from_pdf(file_name, bucket_name)
         if not raw_text:
             print(f"  ✗ No text in {file_name}. Skipping.")
             return None
@@ -358,6 +382,7 @@ def _process_resume_to_row(
             raw_resume_text        = raw_text,
             embedding              = embedding,
             gcs_pdf_path           = f"gs://{bucket_name}/{file_name}",
+            file_hash               = file_hash,
         )
         print(f"  ✓ {fields.get('name')} | {exp_years} yrs | {file_name}")
         return row
@@ -420,26 +445,27 @@ def run_batch_pipeline(
 
 # ── GCS TRIGGER MODE (thread-safe, no global mutation) ────────────────────────
 
-def _is_already_processed(file_name: str, job_id: str) -> bool:
+def _is_already_processed(job_id: str, file_hash: str) -> str | None:
     """
-    Idempotency guard: returns True if this GCS file is already in BQ.
-    Prevents duplicate rows on GCS re-triggers (e.g. after a 429 retry).
+    Idempotency guard: returns the existing candidate_id if a resume with this
+    exact content (file_hash) has already been processed for this job.
+    Prevents duplicate rows/re-extraction on GCS re-triggers (e.g. after a 429 retry).
     """
     query = f"""
-        SELECT 1
+        SELECT candidate_id
         FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
-        WHERE job_id      = @job_id
-          AND gcs_pdf_path = @gcs_pdf_path
+        WHERE job_id    = @job_id
+          AND file_hash = @file_hash
         LIMIT 1
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("job_id",       "STRING", job_id),
-            bigquery.ScalarQueryParameter("gcs_pdf_path", "STRING", f"gs://{BUCKET_NAME}/{file_name}"),
+            bigquery.ScalarQueryParameter("job_id",    "STRING", job_id),
+            bigquery.ScalarQueryParameter("file_hash",  "STRING", file_hash),
         ]
     )
     rows = list(bq_client.query(query, job_config=job_config).result())
-    return len(rows) > 0
+    return rows[0].candidate_id if rows else None
 
 
 def process_resume_from_gcs(
@@ -454,36 +480,33 @@ def process_resume_from_gcs(
     Returns candidate_id.
     """
     print(f"\n  [GCS Trigger] gs://{bucket_name}/{file_name}  job={job_id}")
+    _update_status(job_id, file_name, "uploaded")
 
-    # ── Idempotency guard ──────────────────────────────────────────────────────
-    if _is_already_processed(file_name, job_id):
-        print(f"  ⚠ Already processed — skipping duplicate trigger: {file_name}")
-        # Return the existing candidate_id from BQ
-        query = f"""
-            SELECT candidate_id
-            FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
-            WHERE job_id      = @job_id
-              AND gcs_pdf_path = @gcs_pdf_path
-            LIMIT 1
-        """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("job_id",       "STRING", job_id),
-                bigquery.ScalarQueryParameter("gcs_pdf_path", "STRING", f"gs://{bucket_name}/{file_name}"),
-            ]
-        )
-        rows = list(bq_client.query(query, job_config=job_config).result())
-        return rows[0].candidate_id if rows else None
+    # ── Idempotency guard (hash-based) ──────────────────────────────────────
+    # Download + hash first (cheap), then check BQ before paying for Gemini.
+    bucket    = gcs_client.bucket(bucket_name)
+    pdf_bytes = bucket.blob(file_name).download_as_bytes()
+    file_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    existing_id = _is_already_processed(job_id, file_hash)
+    if existing_id:
+        print(f"  ⚠ Already processed — identical file content, skipping: {file_name}")
+        _update_status(job_id, file_name, "skipped_duplicate")
+        return existing_id
 
     try:
+        _update_status(job_id, file_name, "extracting")
         row = _process_resume_to_row(file_name, bucket_name, job_id)
     except Exception as e:
         msg = str(e)
         if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+            _update_status(job_id, file_name, "retrying", error=msg)
             raise  # re-raise as generic Exception → GCS retries, NOT dead-letter
+        _update_status(job_id, file_name, "failed", error=msg)
         raise ValueError(f"Processing failed for {file_name}: {e}")
 
     if row is None:
+        _update_status(job_id, file_name, "failed", error="No extractable text found in PDF")
         raise ValueError(f"No extractable text in {file_name}")
 
     # ── DML INSERT (no streaming buffer — rows immediately mutable) ────────────
@@ -502,19 +525,27 @@ def process_resume_from_gcs(
     query = f"""
         MERGE `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}` AS target
         USING (
-            SELECT @job_id AS job_id, @gcs_pdf_path AS gcs_pdf_path
+            SELECT @job_id AS job_id, @file_hash AS file_hash,
+                   @email AS email, @phone AS phone
         ) AS source
-        ON  target.job_id       = source.job_id
-        AND target.gcs_pdf_path = source.gcs_pdf_path
+        ON  target.job_id = source.job_id
+        AND (
+              -- exact same file content re-uploaded (any filename)
+              target.file_hash = source.file_hash
+              -- same person, different/edited resume — match on email or phone,
+              -- but only when that field is actually populated on both sides
+              OR (source.email != '' AND target.email = source.email)
+              OR (source.phone != '' AND target.phone = source.phone)
+            )
 
         WHEN NOT MATCHED THEN
         INSERT (candidate_id, job_id, name, email, phone, location,
                 last_organization, minimum_qualification, total_experience_years,
-                skills, raw_resume_text, resume_embedding, gcs_pdf_path,
+                skills, raw_resume_text, resume_embedding, gcs_pdf_path, file_hash,
                 applied_at, screening_status, candidate_result)
         VALUES (@candidate_id, @job_id, @name, @email, @phone, @location,
                 @last_organization, @minimum_qualification, @total_experience_years,
-                {skills_literal}, @raw_resume_text, {emb_literal}, @gcs_pdf_path,
+                {skills_literal}, @raw_resume_text, {emb_literal}, @gcs_pdf_path, @file_hash,
                 @applied_at, @screening_status, @candidate_result)
 
         WHEN MATCHED
@@ -529,7 +560,9 @@ def process_resume_from_gcs(
             total_experience_years = @total_experience_years,
             skills                 = {skills_literal},
             raw_resume_text        = @raw_resume_text,
-            resume_embedding       = {emb_literal}
+            resume_embedding       = {emb_literal},
+            gcs_pdf_path           = @gcs_pdf_path,
+            file_hash              = @file_hash
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -544,16 +577,18 @@ def process_resume_from_gcs(
             bigquery.ScalarQueryParameter("total_experience_years", "FLOAT64", float(row.get("total_experience_years") or 0)),
             bigquery.ScalarQueryParameter("raw_resume_text",        "STRING",  row.get("raw_resume_text")        or ""),
             bigquery.ScalarQueryParameter("gcs_pdf_path",           "STRING",  row.get("gcs_pdf_path")           or ""),
+            bigquery.ScalarQueryParameter("file_hash",              "STRING",  row.get("file_hash")              or ""),
             bigquery.ScalarQueryParameter("applied_at",             "TIMESTAMP",  row.get("applied_at")             or ""),
             bigquery.ScalarQueryParameter("screening_status",       "STRING",  row.get("screening_status")       or ""),
             bigquery.ScalarQueryParameter("candidate_result",       "STRING",  row.get("candidate_result")       or ""),
         ]
     )
+    _update_status(job_id, file_name, "saving_to_bq")
     bq_client.query(query, job_config=job_config).result()
 
+    _update_status(job_id, file_name, "completed")
     print(f"  ✓ GCS Trigger Done — {row['name']} | {row['candidate_id']}")
     return row["candidate_id"]
-
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 

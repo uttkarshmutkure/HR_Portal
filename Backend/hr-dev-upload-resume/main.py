@@ -52,15 +52,15 @@ def upload_resumes_http(request):
             # Strip malicious pathing characters strictly
             clean_name = "".join(c for c in f.filename if c.isalnum() or c in "._- ")
 
-            # TARGET PATH: resume/{job_id}/{clean_name}
-            blob = bucket.blob(f"resume/{job_id}/{clean_name}")
+            # TARGET PATH: resumes/{job_id}/{clean_name}
+            blob = bucket.blob(f"resumes/{job_id}/{clean_name}")
 
             f.seek(0)
             blob.upload_from_file(f, content_type="application/pdf")
             uploaded_files.append(clean_name)
 
         log.info(
-            "Uploaded %d resumes to gs://%s/resume/%s/",
+            "Uploaded %d resumes to gs://%s/resumes/%s/",
             len(uploaded_files),
             bucket_name,
             job_id,

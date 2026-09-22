@@ -7,6 +7,11 @@ import { ResultsStore } from '../../services/resultsStore';
 
 const FONT = 'Inter, sans-serif';
 
+// Module-level caches — persist for the browser tab's lifetime (reset on full reload).
+// Keyed by candidateId so re-opening the same profile doesn't re-trigger Cloud Functions.
+const resumeCache = new Map<string, { aiScore: number; blobUrl: string }>();
+const notesCache = new Map<string, { summary?: string; top_skills?: string[]; education?: string; key_experience?: string[] }>();
+
 // ── Unified Flat Panel ─────────────────────────────────────────────────────────
 function Panel({ title, children, badge }: { title: string; children: React.ReactNode; badge?: React.ReactNode }) {
   return (
@@ -51,6 +56,14 @@ function ResumePanel({ candidateId }: { candidateId: string }) {
   const resumeUrl = getResumeUrl(candidateId);
 
   useEffect(() => {
+    const cached = resumeCache.get(candidateId);
+    if (cached) {
+      setAiScore(cached.aiScore);
+      setBlobUrl(cached.blobUrl);
+      setLoading(false);
+      return;
+    }
+
     let isMounted = true;
     setLoading(true);
     setError(false);
@@ -73,6 +86,11 @@ function ResumePanel({ candidateId }: { candidateId: string }) {
         const blob = await res.blob();
         const objUrl = URL.createObjectURL(blob);
 
+        const resolvedScore = scoreHeader !== null && scoreHeader !== 'unknown' && !isNaN(parseInt(scoreHeader, 10))
+          ? parseInt(scoreHeader, 10)
+          : 0;
+        resumeCache.set(candidateId, { aiScore: resolvedScore, blobUrl: objUrl });
+
         if (isMounted) {
           setBlobUrl(objUrl);
           setLoading(false);
@@ -88,9 +106,10 @@ function ResumePanel({ candidateId }: { candidateId: string }) {
 
     return () => {
       isMounted = false;
-      if (blobUrl) URL.revokeObjectURL(blobUrl); // Prevent browser memory leaks
+      // Don't revoke blobUrl here — it's cached in resumeCache and reused across mounts.
+      // It's only released implicitly when the tab closes or reloads.
     };
-  }, [resumeUrl]);
+  }, [resumeUrl, candidateId]);
 
   // Color logic: For AI detection, Low % is Good (Green), High % is Bad (Red)
   const getScoreTheme = (score: number) => {
@@ -211,6 +230,13 @@ function ResumeNotesDropdown({ jobId, candidateId }: { jobId: string; candidateI
       return;
     }
 
+    const cached = notesCache.get(candidateId);
+    if (cached) {
+      setNotes(cached);
+      setIsOpen(true);
+      return;
+    }
+
     setIsOpen(true);
     setLoading(true);
     setError(null);
@@ -226,6 +252,7 @@ function ResumeNotesDropdown({ jobId, candidateId }: { jobId: string; candidateI
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to extract notes');
 
+      notesCache.set(candidateId, data.notes);
       setNotes(data.notes);
     } catch (err: any) {
       setError(err.message || 'Network error');

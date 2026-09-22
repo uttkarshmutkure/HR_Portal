@@ -306,6 +306,37 @@ def handle_candidate_data(request):
             current_status = rows[0].pipeline_status if rows and rows[0].pipeline_status else 'IDLE'
             return (json.dumps({'status': current_status}), 200, headers)
 
+        # ── GET_RESUME_STATUS ───────────────────────────────────────────────────
+        # Polled by the frontend to show live per-resume processing progress.
+        elif action == 'GET_RESUME_STATUS':
+            job_id    = data.get('jobId')
+            file_name = data.get('fileName')
+
+            if not all([job_id, file_name]):
+                return (json.dumps({'error': 'Missing jobId or fileName'}), 400, headers)
+
+            query = f"""
+                SELECT step, error, updated_at
+                FROM `{project_id}.{dataset_id}.resume_status`
+                WHERE job_id = @job_id AND file_name = @file_name
+                LIMIT 1
+            """
+            params = [
+                bigquery.ScalarQueryParameter('job_id', 'STRING', job_id),
+                bigquery.ScalarQueryParameter('file_name', 'STRING', file_name),
+            ]
+            rows = list(bq_client.query(query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result())
+
+            if not rows:
+                return (json.dumps({'success': True, 'step': None}), 200, headers)
+
+            row = rows[0]
+            return (json.dumps({
+                'success': True,
+                'step':    row.step,
+                'error':   row.error or None,
+            }), 200, headers)
+
         # ── GET_INTERVIEWERS ───────────────────────────────────────────────────
         elif action == 'GET_INTERVIEWERS':
             job_id     = data.get('jobId')

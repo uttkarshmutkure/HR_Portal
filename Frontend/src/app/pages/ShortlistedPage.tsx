@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useLocation, Link } from 'react-router';
-import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2, RefreshCw, UserCog, Search  } from 'lucide-react';
+import { Users, ArrowLeft, ArrowRight, Eye, Calendar, Loader2, RefreshCw, UserCog, Search, Info  } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { EmailService } from '../../services/emailService';
 import { listJobs } from '../../services/screening';
@@ -385,6 +385,12 @@ function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule, onOpenM
           >
             <UserCog size={11} /> Manual Slot Selection
           </button>
+          <span
+            title="Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response. For the standard flow, use 'Schedule & Move' instead."
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', color: '#9CA3AF', cursor: 'help', flexShrink: 0 }}
+          >
+            <Info size={13} />
+          </span>
         </div>
       </div>
     </div>

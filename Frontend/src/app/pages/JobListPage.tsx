@@ -446,6 +446,36 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
 
   const [uploadingResume, setUploadingResume] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [resumeStatus, setResumeStatus] = useState<{ file_name: string; step: string; error?: string } | null>(null);
+  const resumePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopResumePolling = () => {
+    if (resumePollRef.current) { clearInterval(resumePollRef.current); resumePollRef.current = null; }
+  };
+
+  const pollResumeStatus = (fileName: string) => {
+    stopResumePolling();
+    // Mirror the backend's sanitization exactly (upload_resumes_http keeps only alnum, ._- and spaces)
+    const cleanName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, '');
+    const fullPath = `resumes/${job.job_id}/${cleanName}`;
+
+    resumePollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(DATA_MANAGER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'GET_RESUME_STATUS', jobId: job.job_id, fileName: fullPath }),
+        });
+        const data = await res.json();
+        if (data.step) {
+          setResumeStatus({ file_name: fullPath, step: data.step, error: data.error });
+          if (['completed', 'skipped_duplicate', 'failed'].includes(data.step)) {
+            stopResumePolling();
+          }
+        }
+      } catch { /* network blip — keep polling */ }
+    }, 3000);
+  };
 
   const handleUploadClick = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevents accordion from toggling open/closed!
@@ -462,22 +492,20 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     formData.append('job_id', job.job_id);
     Array.from(files).forEach((f) => formData.append('resumes', f));
 
+    const firstFileName = files[0].name;
+    pollResumeStatus(firstFileName);
+
     try {
       const UPLOAD_URL = import.meta.env.VITE_UPLOAD_RESUME_URL;
-      const res = await fetch(UPLOAD_URL, {
-        method: 'POST',
-        body: formData, // NOTE: Never manually set Content-Type for FormData in fetch()
-      });
-
+      const res = await fetch(UPLOAD_URL, { method: 'POST', body: formData });
       if (!res.ok) throw new Error('Upload failed');
-      
       showToast(`${files.length} resume(s) sent to bucket! Pipeline incoming...`, 'success');
-      startPolling(); // Immediately kick UI into listening mode
+      startPolling();
     } catch (err) {
       showToast('Failed to upload resumes to storage.', 'error');
     } finally {
       setUploadingResume(false);
-      if (fileInputRef.current) fileInputRef.current.value = ''; // Reset input
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -554,6 +582,8 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     return () => stopPolling();
   }, [job.job_id]);
 
+  useEffect(() => () => stopResumePolling(), []);
+
   const handleRunScreening = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (screenStatus === 'loading') return;
@@ -561,11 +591,24 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     setScreenStatus('loading');
     setScreenError(null);
 
-    fetch(RUN_PIPELINE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ job_id: job.job_id }),
-    }).catch(() => {});
+    try {
+      const res = await fetch(RUN_PIPELINE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: job.job_id }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || `Request failed (${res.status})`, 'error');
+        setScreenStatus('idle');
+        return;
+      }
+    } catch {
+      showToast('Network error — could not reach the server.', 'error');
+      setScreenStatus('idle');
+      return;
+    }
 
     startPolling();
   };
@@ -1007,6 +1050,14 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '2px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: T.text, fontFamily: FONT }}>{job.title}</div>
+            <span style={{
+              padding: '2px 8px', borderRadius: '4px',
+              fontSize: '10px', fontWeight: 600, fontFamily: FONT, letterSpacing: '0.02em',
+              background: T.gray100, color: T.gray600,
+              border: `0.5px solid ${T.gray200}`,
+            }}>
+              {job.job_id}
+            </span>
             <button
               onClick={(e) => { e.stopPropagation(); setShowReferModal(true); }}
               style={{ padding: '4px 11px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: '0.5px solid #C7D2FE', borderRadius: '6px', color: '#5B5FCF', cursor: 'pointer', transition: 'background .12s', flexShrink: 0 }}
@@ -1020,8 +1071,8 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <input 
+          <div style={{ display: 'flex', gap: '6px', position: 'relative' }}>
+            <input
               type="file" 
               ref={fileInputRef} 
               onChange={handleFileSelected} 
@@ -1044,6 +1095,21 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
               {uploadingResume ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={11} style={{ color: T.blue }} />}
               {uploadingResume ? 'Uploading…' : 'Upload Resumes'}
             </button>
+
+            {resumeStatus && !['completed', 'skipped_duplicate'].includes(resumeStatus.step) && (
+              <div style={{
+                position: 'absolute', top: '34px', left: 0, background: T.white,
+                border: `0.5px solid ${resumeStatus.step === 'failed' ? '#FCA5A5' : T.gray200}`,
+                borderRadius: '8px', padding: '10px 14px', fontSize: '11px', fontFamily: FONT,
+                boxShadow: '0 6px 16px rgba(0,0,0,0.08)', zIndex: 10, minWidth: '220px',
+              }}>
+                <div style={{ fontWeight: 600, color: resumeStatus.step === 'failed' ? T.red : T.text }}>
+                  {resumeStatus.step === 'failed' ? '❌ Failed' : `⏳ ${resumeStatus.step.replace(/_/g, ' ')}`}
+                </div>
+                {resumeStatus.error && <div style={{ color: T.textSub, marginTop: '4px' }}>{resumeStatus.error}</div>}
+              </div>
+            )}
+
             <button
               onClick={handleRunScreening}
               disabled={screenStatus === 'loading'}

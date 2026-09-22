@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { Check, X, Clock, Users, RefreshCw, UserCog, Loader2 } from 'lucide-react';
+import { Check, X, Clock, Users, RefreshCw, UserCog, Loader2, Info } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { ShortlistStore } from '../../services/shortlistStore';
 import { FeedbackStore } from '../../services/feedbackStore';
@@ -158,6 +158,9 @@ const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
 
 const pipelineCache: Record<string, any[]> = {};
 const roundsCache: Record<string, Record<string, RoundTab>> = {};
+type QuestionCacheEntry = { theory: any[]; coding: any[] };
+const questionsCacheStore: Map<string, QuestionCacheEntry> = new Map();
+const attemptedQsStore: Set<string> = new Set();
 const statusesCache: Record<string, Record<string, [string, string | null]>> = {};
 const profileCache: Record<string, any> = {};
 const interviewersCache: Record<string, Record<string, Record<string, string | null>>> = {};
@@ -555,16 +558,14 @@ export default function InterviewPipelinePage() {
 
   // ── Interview Questions ────────────────────────────────────────────────────
   type QuestionCache = { theory: any[]; coding: any[] };
-  const [questionsCache, setQuestionsCache] = useState<Map<string, QuestionCache>>(new Map());
-  const [loadingKeys,    setLoadingKeys]    = useState<Set<string>>(new Set());
-
-  const [attemptedQs,    setAttemptedQs]    = useState<Set<string>>(new Set());
+  const [loadingKeys,   setLoadingKeys]   = useState<Set<string>>(new Set());
+  const [cacheVersion,  setCacheVersion]  = useState(0); // bump to force re-render after module cache writes
 
   const roundMap: Record<RoundTab, string> = {
     round1: 'round1', round2: 'technical', hrround: 'hr', onboarding: 'hr', hired: 'hr', archived: 'hr'
   };
   const questionsCacheKey = selectedCandId ? `${selectedCandId}:${roundMap[activeTab]}` : null;
-  const cachedQs          = questionsCacheKey ? questionsCache.get(questionsCacheKey) : undefined;
+  const cachedQs          = questionsCacheKey ? questionsCacheStore.get(questionsCacheKey) : undefined;
   const theoryQuestions   = cachedQs?.theory ?? [];
   const codingQuestions   = cachedQs?.coding  ?? [];
   const hasQuestions      = theoryQuestions.length > 0 || codingQuestions.length > 0;
@@ -575,7 +576,7 @@ export default function InterviewPipelinePage() {
     if (!jobId || !selectedCandId || !questionsCacheKey) return;
     const key = questionsCacheKey;
     setLoadingKeys(prev => new Set(prev).add(key));
-    setAttemptedQs(prev => new Set(prev).add(key));
+    attemptedQsStore.add(key);
     try {
       const res  = await fetch(import.meta.env.VITE_GENERATE_QUESTIONS_URL, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -583,10 +584,11 @@ export default function InterviewPipelinePage() {
       });
       const data = await res.json();
       if (data.success) {
-        setQuestionsCache(prev => new Map(prev).set(key, {
+        questionsCacheStore.set(key, {
           theory: data.theory_questions ?? [],
           coding: data.coding_questions  ?? [],
-        }));
+        });
+        setCacheVersion(v => v + 1);
       } else {
         showToast(data.error ?? 'Failed to generate questions', 'error');
       }
@@ -600,13 +602,13 @@ export default function InterviewPipelinePage() {
   useEffect(() => {
     if (
       questionsCacheKey && 
-      !questionsCache.has(questionsCacheKey) && 
+      !questionsCacheStore.has(questionsCacheKey) && 
       !loadingKeys.has(questionsCacheKey) && 
-      !attemptedQs.has(questionsCacheKey)
+      !attemptedQsStore.has(questionsCacheKey)
     ) {
       generateQuestions();
     }
-  }, [questionsCacheKey, questionsCache, loadingKeys, attemptedQs]);
+  }, [questionsCacheKey, cacheVersion, loadingKeys]);
 
   const searchParams   = new URLSearchParams(location.search);
   const urlCandidateId = searchParams.get('candidateId');
@@ -1538,15 +1540,24 @@ export default function InterviewPipelinePage() {
                             {/* --------------------------- */}
 
                             {(activeTab === 'round2' || activeTab === 'hrround') && (
-                              <button
-                                className="btn-sm"
-                                onClick={e => { e.stopPropagation(); setManualCand(cand); }}
-                                title="Manual Slot Selection"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F5F3FF', borderColor: '#DDD6FE', color: '#7C3AED', whiteSpace: 'nowrap' }}
-                              >
-                                <UserCog size={12} /> Manual Slot
-                              </button>
-                            )}
+                                    <>
+                                      <button
+                                        className="btn-sm"
+                                        onClick={e => { e.stopPropagation(); setManualCand(cand); }}
+                                        title="Manual Slot Selection"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F5F3FF', borderColor: '#DDD6FE', color: '#7C3AED', whiteSpace: 'nowrap' }}
+                                      >
+                                        <UserCog size={12} /> Manual Slot
+                                      </button>
+                                      <span
+                                        onClick={e => e.stopPropagation()}
+                                        title="Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response."
+                                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', color: '#9CA3AF', cursor: 'help', flexShrink: 0 }}
+                                      >
+                                        <Info size={13} />
+                                      </span>
+                                    </>
+                                  )}
 
                             <button 
                               className="btn-sm danger btn-icon" 
