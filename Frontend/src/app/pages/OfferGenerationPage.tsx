@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip, Check, Pencil, Download, Mic, Square, Info } from 'lucide-react';
+import { ArrowLeft, FileText, MessageSquare, Upload, Copy, ChevronRight, Paperclip, Check, Pencil, Download, Mic, Square, Info, X} from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { useToast } from '../components/ToastContext';
 import { TopCandidate } from '../../services/screening';
@@ -267,8 +267,25 @@ export default function OfferGenerationPage() {
     <DashboardLayout breadcrumb={`Dashboard / Jobs / ${jdTitle} / Pipeline / Generate Offer`}>
       <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', padding: '20px 32px', boxSizing: 'border-box' }}>
 
-        {/* Main Workspace */}
-        <div style={{ flex: 1, minHeight: 0, borderRadius: 12, border: `1px solid ${BORDER}`, overflow: 'hidden', display: 'flex' }}>
+               {/* Main Workspace */}
+        <div style={{ flex: 1, minHeight: 0, borderRadius: 12, border: `1px solid ${BORDER}`, overflow: 'hidden', display: 'flex', position: 'relative' }}>
+          <button
+            onClick={() => navigate(`/jobs/${jobId}/pipeline`, {
+              state: { jdTitle, restoreTab: 'onboarding', restoreCandidateId: candidateId },
+            })}
+            title="Close and return to Onboarding"
+            style={{
+              position: 'absolute', top: 12, right: 12, zIndex: 200,
+              width: 30, height: 30, borderRadius: '50%',
+              border: `1px solid ${BORDER}`, background: '#fff', color: TEXT_MID,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+            }}
+            onMouseOver={(e) => { e.currentTarget.style.background = '#F3F4F6'; e.currentTarget.style.color = TEXT_DARK; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.color = TEXT_MID; }}
+          >
+            <X size={16} />
+          </button>
           <OfferChatPanel
             cand={cand} jdTitle={jdTitle} jobId={jobId ?? ''}
             candidateId={candidateId ?? ''}
@@ -1108,8 +1125,8 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
       <p style={{ margin: '0 0 14px' }}>If you have any question, please clarify from the undersigned.</p>
       <p style={{ margin: '0 0 14px' }}>With regards,</p>
       <div style={{ marginTop: 40, marginBottom: 48 }}>
-        <div style={{ borderTop: '1px solid #374151', width: 180, paddingTop: 6, fontSize: 12 }}>____________________________</div>
-        <div style={{ borderTop: '1px solid #374151', width: 180, paddingTop: 6, fontSize: 12, marginTop: 4 }}>____________________________</div>
+        {/* <div style={{ borderTop: '1px solid #374151', width: 180, paddingTop: 6, fontSize: 12 }}>____________________________</div> */}
+        <div style={{ borderTop: '1px solid #374151', width: 190, paddingTop: 6, fontSize: 12, marginTop: 25 }}>____________________________</div>
         <div style={{ fontWeight: 700, fontSize: 12, marginTop: 6 }}>HR – Head</div>
       </div>
       <div style={{ borderTop: '1px solid #D1D5DB', paddingTop: 20, marginBottom: 40, fontSize: 13 }}>
@@ -1383,6 +1400,7 @@ function ChatInputBar({ input, onSetInput, onSend, onAttach, placeholder = 'Type
 }) {
   const { showToast } = useToast();
   const { isListening, isSupported, start, stop } = useSpeechToText((text) => onSetInput(text));
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleMicClick = () => {
     if (isListening) {
@@ -1394,20 +1412,45 @@ function ChatInputBar({ input, onSetInput, onSend, onAttach, placeholder = 'Type
     }
   };
 
+  // Auto-grow the textarea as the user adds lines, capped at ~6 lines
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [input]);
+
   return (
     <div style={{ padding: '10px 14px', background: '#fff', borderTop: `1px solid ${BORDER}`, flexShrink: 0 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: BG_SOFT, borderRadius: 24, border: `1px solid ${BORDER}`, padding: '4px 6px 4px 14px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', background: BG_SOFT, borderRadius: 20, border: `1px solid ${BORDER}`, padding: '8px 6px 8px 14px' }}>
         
         {/* Attachment Button */}
         <button 
           onClick={onAttach} 
-          style={{ background: 'none', border: 'none', color: TEXT_MID, cursor: 'pointer', padding: '0 4px', display: 'flex', alignItems: 'center' }} 
+          style={{ background: 'none', border: 'none', color: TEXT_MID, cursor: 'pointer', padding: '4px 4px 0', display: 'flex', alignItems: 'center', flexShrink: 0 }} 
           title="Upload document template or signature"
         >
           <Paperclip size={16} />
         </button>
 
-        <input value={input} onChange={e => onSetInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && onSend()} placeholder={isListening ? 'Listening…' : placeholder} style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 13, outline: 'none', color: TEXT_DARK }} />
+         <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={e => onSetInput(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder={isListening ? 'Listening…' : placeholder}
+          rows={1}
+          style={{
+            flex: 1, border: 'none', background: 'transparent', fontSize: 13, outline: 'none',
+            color: TEXT_DARK, resize: 'none', fontFamily: 'inherit', lineHeight: 1.5,
+            padding: '4px 0', maxHeight: 132, overflowY: 'auto',
+          }}
+        />
 
         {/* Mic Button */}
         <button
@@ -1767,11 +1810,21 @@ export function SalaryDetailsModal({ rules, onChange, onClose }: { rules: Salary
   const field = (key: keyof SalaryRules, label: string) => (
     <div key={key}>
       <label style={labelStyle}>{label}</label>
-      <input type="number" value={local[key]} onChange={e => setLocal(p => ({ ...p, [key]: Number(e.target.value) }))} style={inputStyle} />
+      <input type="number" className="no-spinner" value={local[key]} onChange={e => setLocal(p => ({ ...p, [key]: Number(e.target.value) }))} style={inputStyle} />
     </div>
   );
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }} onClick={onClose}>
+      <style>{`
+        input.no-spinner::-webkit-outer-spin-button,
+        input.no-spinner::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input.no-spinner[type='number'] {
+          -moz-appearance: textfield;
+        }
+      `}</style>
       <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 420, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, color: TEXT_DARK }}>Salary Breakup Rules</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
