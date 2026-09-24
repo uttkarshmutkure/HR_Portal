@@ -748,22 +748,7 @@ function OfferChatPanel({
 
       // NEW: the wrapper is now pinned to DOC_WIDTH, so actualWidth is stable
       // and matches what the user saw when placing the signature.
-      const actualWidth = contentEl.getBoundingClientRect().width || DOC_WIDTH;
-      const scaleRatio = 800 / actualWidth;
-
-      const sigWrapper = clone.querySelector('#signature-wrapper') as HTMLElement | null;
-      if (sigWrapper) {
-        const curLeft = parseFloat(sigWrapper.style.left) || 0;
-        const curTop = parseFloat(sigWrapper.style.top) || 0;
-        const curWidth = parseFloat(sigWrapper.style.width) || 0;
-        const curHeight = parseFloat(sigWrapper.style.height) || 0;
-        sigWrapper.style.left = `${curLeft * scaleRatio}px`;
-        sigWrapper.style.top = `${curTop * scaleRatio}px`;
-        sigWrapper.style.width = `${curWidth * scaleRatio}px`;
-        sigWrapper.style.height = `${curHeight * scaleRatio}px`;
-      }
-
-      const scaledHtml = clone.innerHTML;
+      const scaledHtml = clone.outerHTML;
 
       const iframe = document.createElement('iframe');
       iframe.style.position = 'absolute';
@@ -1075,8 +1060,7 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
           <div>{draft.candidateAddress || blank(260)}&nbsp;(residential address)</div>
         </div>
       </div>
-      <div style={{ marginBottom: 24, fontSize: 13 }}>Phone No:&nbsp;{draft.candidatePhone || blank(200)}</div>
-      <div style={{ marginBottom: 20, fontSize: 13 }}><strong>Sub: Offer Letter</strong></div>
+      <div style={{ marginBottom: 20, fontSize: 13 }}><strong>Subject: Offer Letter: Congratulations and Welcome to Atgeir Solutions</strong></div>
       <p style={{ margin: '0 0 14px' }}>Dear {firstName || blank(100)},</p>
       <p style={{ margin: '0 0 14px' }}>
         We are pleased to offer you the {isConsultant ? 'engagement' : isIntern ? 'internship' : 'post'} of <strong>{draft.designation || jdTitle || blank(140)}</strong> based at <strong>{draft.location || blank(100)}</strong>.

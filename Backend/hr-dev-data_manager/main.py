@@ -252,7 +252,7 @@ def handle_candidate_data(request):
                 return (json.dumps({'error': 'Missing required fields'}), 400, headers)
 
             check_query = f"""
-                SELECT verdict
+                SELECT verdict, rating, tech_skill, communication, notes
                 FROM `{project_id}.{dataset_id}.interview_feedback`
                 WHERE job_id = @job_id AND candidate_id = @candidate_id AND round = @round
                 LIMIT 1
@@ -263,7 +263,18 @@ def handle_candidate_data(request):
                 bigquery.ScalarQueryParameter('round',        'STRING', round_name),
             ]
             rows = list(bq_client.query(check_query, job_config=bigquery.QueryJobConfig(query_parameters=check_params)).result())
+            existing_verdict = rows[0].verdict if rows else None
+            is_final = existing_verdict in ('advance', 'reject')
+            is_hold  = existing_verdict == 'hold'
 
+            previous_feedback = None
+            if is_hold:
+                previous_feedback = {
+                    'rating':        rows[0].rating,
+                    'techSkill':     rows[0].tech_skill,
+                    'communication': rows[0].communication,
+                    'notes':         rows[0].notes,
+                }
             # Fetch candidate email/name — technical/hr rows may have blank email
             # (frontend didn't pass candidateEmail when saving those slots),
             # so look across all rounds and take the latest non-empty one.
@@ -284,9 +295,11 @@ def handle_candidate_data(request):
             candidate_name  = contact_rows[0].candidate_name  if contact_rows else ''
 
             return (json.dumps({
-                'alreadySubmitted': len(rows) > 0,
-                'candidateEmail':   candidate_email,
-                'candidateName':    candidate_name,
+                'alreadySubmitted':  is_final,
+                'isHold':            is_hold,
+                'previousFeedback':  previous_feedback,
+                'candidateEmail':    candidate_email,
+                'candidateName':     candidate_name,
             }), 200, headers)
 
         # ── CHECK_PIPELINE_STATUS ──────────────────────────────────────────────
@@ -597,35 +610,6 @@ def handle_candidate_data(request):
             bq_client.query(reject_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
             
             return (json.dumps({'success': True}), 200, headers)
-
-        # ── SAVE_CANDIDATE_REVIEW ─────────────────────────────────────────────
-        elif action == 'SAVE_CANDIDATE_REVIEW':
-            job_id     = data.get('jobId')
-            cand_id    = data.get('candidateId')
-            cand_name  = data.get('candidateName')
-            round_name = data.get('round')
-            rating     = data.get('rating')
-            advice     = data.get('advice', '').strip()
-
-            if not all([job_id, cand_id, rating]):
-                return (json.dumps({'error': 'Missing essential review parameters'}), 400, headers)
-
-            insert_query = f"""
-                INSERT INTO `{project_id}.{dataset_id}.candidate_reviews`
-                (review_id, job_id, candidate_id, candidate_name, round, experience_rating, advice_notes, submitted_at)
-                VALUES (GENERATE_UUID(), @job_id, @cand_id, @cand_name, @round_name, @rating, @advice, CURRENT_TIMESTAMP())
-            """
-            params = [
-                bigquery.ScalarQueryParameter('job_id',     'STRING', job_id),
-                bigquery.ScalarQueryParameter('cand_id',    'STRING', cand_id),
-                bigquery.ScalarQueryParameter('cand_name',  'STRING', cand_name),
-                bigquery.ScalarQueryParameter('round_name', 'STRING', round_name),
-                bigquery.ScalarQueryParameter('rating',     'INT64',  int(rating)),
-                bigquery.ScalarQueryParameter('advice',     'STRING', advice),
-            ]
-            bq_client.query(insert_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
-            
-            return (json.dumps({'success': True}), 200, headers)
         
         # ── GET_RESUME_KEY_NOTES ───────────────────────────────────────────────
         elif action == 'GET_RESUME_KEY_NOTES':
@@ -685,6 +669,94 @@ def handle_candidate_data(request):
 
             return (json.dumps({'success': True, 'notes': notes_json}), 200, headers)
 
+                # ── SAVE_CANDIDATE_REVIEW ─────────────────────────────────────────────
+        elif action == 'SAVE_CANDIDATE_REVIEW':
+            job_id             = data.get('jobId')
+            cand_id            = data.get('candidateId')
+            round_name         = data.get('round')
+            rating             = data.get('rating')
+            process_rating     = data.get('processRating')
+            clarity_rating     = data.get('clarityRating')
+            interviewer_rating = data.get('interviewerRating')
+            overall_exp_rating = data.get('overallExpRating')
+            comments           = (data.get('comments') or '').strip()
+
+            if not all([job_id, cand_id, round_name]) or rating is None:
+                return (json.dumps({'error': 'Missing essential review parameters'}), 400, headers)
+
+            # Page doesn't send candidateName — look it up the same way CHECK_FEEDBACK does
+            contact_query = f"""
+                SELECT candidate_name
+                FROM `{project_id}.{dataset_id}.candidate_slot_selections`
+                WHERE job_id = @job_id AND candidate_id = @cand_id
+                  AND candidate_name IS NOT NULL AND candidate_name != ''
+                ORDER BY confirmed_at DESC
+                LIMIT 1
+            """
+            contact_params = [
+                bigquery.ScalarQueryParameter('job_id',  'STRING', job_id),
+                bigquery.ScalarQueryParameter('cand_id', 'STRING', cand_id),
+            ]
+            contact_rows = list(bq_client.query(contact_query, job_config=bigquery.QueryJobConfig(query_parameters=contact_params)).result())
+            cand_name = contact_rows[0].candidate_name if contact_rows else ''
+
+            # Existing table has no per-question columns, so fold the four
+            # sub-ratings into advice_notes as a small prefix block, and store
+            # the rounded overall average in experience_rating (INTEGER).
+            breakdown_lines = []
+            if process_rating is not None:
+                breakdown_lines.append(f"Communication Before Interview: {process_rating}/5")
+            if clarity_rating is not None:
+                breakdown_lines.append(f"Clarity of Process: {clarity_rating}/5")
+            if interviewer_rating is not None:
+                breakdown_lines.append(f"Interviewer Professionalism: {interviewer_rating}/5")
+            if overall_exp_rating is not None:
+                breakdown_lines.append(f"Overall Experience: {overall_exp_rating}/5")
+
+            breakdown_text = " | ".join(breakdown_lines)
+            full_notes = f"[{breakdown_text}]" + (f"\n\n{comments}" if comments else "") if breakdown_text else comments
+
+            insert_query = f"""
+                INSERT INTO `{project_id}.{dataset_id}.candidate_reviews`
+                (review_id, job_id, candidate_id, candidate_name, round, experience_rating, advice_notes, submitted_at)
+                VALUES (GENERATE_UUID(), @job_id, @cand_id, @cand_name, @round_name, @rating, @notes, CURRENT_TIMESTAMP())
+            """
+            params = [
+                bigquery.ScalarQueryParameter('job_id',     'STRING', job_id),
+                bigquery.ScalarQueryParameter('cand_id',    'STRING', cand_id),
+                bigquery.ScalarQueryParameter('cand_name',  'STRING', cand_name),
+                bigquery.ScalarQueryParameter('round_name', 'STRING', round_name),
+                bigquery.ScalarQueryParameter('rating',     'INTEGER', round(float(rating))),
+                bigquery.ScalarQueryParameter('notes',      'STRING', full_notes),
+            ]
+            bq_client.query(insert_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+
+            return (json.dumps({'success': True}), 200, headers)
+
+                # ── CHECK_CANDIDATE_REVIEW ─────────────────────────────────────────────
+        elif action == 'CHECK_CANDIDATE_REVIEW':
+            job_id       = data.get('jobId')
+            candidate_id = data.get('candidateId')
+            round_name   = data.get('round')
+
+            if not all([job_id, candidate_id, round_name]):
+                return (json.dumps({'error': 'Missing required fields'}), 400, headers)
+
+            check_query = f"""
+                SELECT review_id
+                FROM `{project_id}.{dataset_id}.candidate_reviews`
+                WHERE job_id = @job_id AND candidate_id = @candidate_id AND round = @round
+                LIMIT 1
+            """
+            check_params = [
+                bigquery.ScalarQueryParameter('job_id',       'STRING', job_id),
+                bigquery.ScalarQueryParameter('candidate_id', 'STRING', candidate_id),
+                bigquery.ScalarQueryParameter('round',        'STRING', round_name),
+            ]
+            rows = list(bq_client.query(check_query, job_config=bigquery.QueryJobConfig(query_parameters=check_params)).result())
+
+            return (json.dumps({'alreadySubmitted': len(rows) > 0}), 200, headers)
+        
         else:
             return (json.dumps({'error': f'Unknown action: {action}'}), 400, headers)
         

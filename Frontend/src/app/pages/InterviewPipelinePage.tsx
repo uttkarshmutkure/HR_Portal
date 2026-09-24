@@ -86,6 +86,7 @@ const resolveBQStatus = (
     const st = norm(hr.status);
     if (st === 'rejected')             return ['Rejected', null];
     if (st === 'advanced')             return ['Offer Stage', null];
+    if (st === 'on_hold')              return ['HR Feedback Received', 'On Hold'];
     if (st === 'feedback_submitted') {
       if (hasFeedback('hr')) {
         const v = norm(getVerdict('hr'));
@@ -101,6 +102,7 @@ const resolveBQStatus = (
   if (r2 && norm(r2.status) !== 'not_started' && norm(r2.status) !== '') {
     const st = norm(r2.status);
     if (st === 'rejected')             return ['Rejected', null];
+    if (st === 'on_hold')              return ['R2 Feedback Received', 'On Hold'];
     if (st === 'feedback_submitted') {
       if (hasFeedback('technical')) {
         const v = norm(getVerdict('technical'));
@@ -117,6 +119,7 @@ const resolveBQStatus = (
   if (r1 && norm(r1.status) !== 'not_started' && norm(r1.status) !== '') {
     const st = norm(r1.status);
     if (st === 'rejected')             return ['Rejected', null];
+    if (st === 'on_hold')              return ['R1 Feedback Received', 'On Hold'];
     if (st === 'feedback_submitted') {
       if (hasFeedback('round1')) {
         const v = norm(getVerdict('round1'));
@@ -149,6 +152,7 @@ const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
   'R1 Feedback Received':         { bg: '#EFF6FF', color: '#2563EB' },
   'R2 Feedback Received':         { bg: '#EFF6FF', color: '#2563EB' },
   'HR Feedback Received':         { bg: '#EFF6FF', color: '#2563EB' },
+  'On Hold':                      { bg: '#EFF6FF', color: '#3B82F6' },
 
   // ── Secondary badges ──────────────────────────────────────────────────────
   'Awaiting Feedback':            { bg: '#FFF7ED', color: '#EA580C' },
@@ -894,6 +898,7 @@ export default function InterviewPipelinePage() {
     .fb-round-label { font-size: 11px; font-weight: 700; color: #F07C2D; text-transform: uppercase; }
     .fb-verdict-pass { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #ECFDF5; color: #059669; }
     .fb-verdict-fail { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #FEF2F2; color: #DC2626; }
+    .fb-verdict-hold { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #EFF6FF; color: #3B82F6; }
     .fb-meta-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
     .fb-meta-item { font-size: 11px; color: #6B7280; }
     .fb-meta-item strong { color: #111827; }
@@ -1123,7 +1128,7 @@ export default function InterviewPipelinePage() {
     const st = norm(roundTimeline?.status);
 
     // 2. Check if interview is scheduled (or completed/feedback submitted)
-    const isScheduled = ['scheduled', 'confirmed', 'feedback_submitted', 'advanced', 'completed'].includes(st) || feedbacks.some((fb: any) => norm(fb.round) === currentRoundId);
+    const isScheduled = ['scheduled', 'confirmed', 'feedback_submitted', 'advanced', 'completed', 'on_hold'].includes(st) || feedbacks.some((fb: any) => norm(fb.round) === currentRoundId);
 
     // 3. Generate secure frontend token matching backend specification
     const feedbackUrl = selectedCandidate && jobId ? (() => {
@@ -1186,8 +1191,8 @@ export default function InterviewPipelinePage() {
             <div key={i} className="fb-card">
               <div className="fb-card-head">
                 <span className="fb-round-label">{ROUND_LABELS[fb.round] ?? fb.round}</span>
-                <span className={fb.verdict === 'advance' ? 'fb-verdict-pass' : 'fb-verdict-fail'}>
-                  {fb.verdict === 'advance' ? '✓ Advanced' : '✕ Rejected'}
+                <span className={fb.verdict === 'advance' ? 'fb-verdict-pass' : fb.verdict === 'hold' ? 'fb-verdict-hold' : 'fb-verdict-fail'}>
+                  {fb.verdict === 'advance' ? '✓ Advanced' : fb.verdict === 'hold' ? '⏸ On Hold' : '✕ Rejected'}
                 </span>
               </div>
               <div className="fb-meta-row">
@@ -1221,6 +1226,7 @@ export default function InterviewPipelinePage() {
     const isHrAdvanced   = isHrRound && (feedbackData?.timeline ?? []).find((t: any) => t.round === 'hr')?.status === 'advanced';
     const isHrSubmitted  = isHrRound && hasFeedback;
     const anyRejection   = allFeedback.some((fb: any) => fb.verdict === 'reject');
+    const isOnHold       = !anyRejection && roundFeedback.some((fb: any) => fb.verdict === 'hold');
 
     // ── Awaiting Feedback: check secondary badge ───────────────────────────
     const [, currentSecondary] = candidateStatuses[cand.candidate_id] ?? ['Shortlisted', null];
@@ -1280,6 +1286,7 @@ export default function InterviewPipelinePage() {
                     let col   = '#EA580C';
                     if (anyRejection)        { label = 'Rejected';           bg = '#FEF2F2'; col = '#DC2626'; }
                     else if (isHrAdvanced)   { label = 'Offer Stage';        bg = '#ECFDF5'; col = '#059669'; }
+                    else if (isOnHold)       { label = 'On Hold';            bg = '#EFF6FF'; col = '#3B82F6'; }
                     else if (hasFeedback)    {
                       label = isHrRound
                         ? 'Feedback Received'
@@ -1328,13 +1335,15 @@ export default function InterviewPipelinePage() {
                 {/* Verdict banner — rejection highlighted red */}
                 <div style={{
                   padding: '12px 16px', borderRadius: 10, marginBottom: 16,
-                  background: fb.verdict === 'advance' ? '#ECFDF5' : '#FEF2F2',
-                  border: `1px solid ${fb.verdict === 'advance' ? '#6EE7B7' : '#FCA5A5'}`,
+                  background: fb.verdict === 'advance' ? '#ECFDF5' : fb.verdict === 'hold' ? '#EFF6FF' : '#FEF2F2',
+                  border: `1px solid ${fb.verdict === 'advance' ? '#6EE7B7' : fb.verdict === 'hold' ? '#BFDBFE' : '#FCA5A5'}`,
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: fb.verdict === 'advance' ? '#059669' : '#DC2626', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: fb.verdict === 'advance' ? '#059669' : fb.verdict === 'hold' ? '#3B82F6' : '#DC2626', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {fb.verdict === 'advance'
                       ? '✓ Candidate Advanced to Next Round'
+                      : fb.verdict === 'hold'
+                      ? <><span style={{ background: '#3B82F6', color: '#fff', borderRadius: 4, padding: '1px 7px', fontSize: 11 }}>ON HOLD</span> Awaiting Final Decision</>
                       : <><span style={{ background: '#DC2626', color: '#fff', borderRadius: 4, padding: '1px 7px', fontSize: 11 }}>REJECTED</span> Candidate Rejected</>
                     }
                   </span>

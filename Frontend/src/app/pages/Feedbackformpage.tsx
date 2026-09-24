@@ -141,6 +141,8 @@ export default function FeedbackFormPage() {
   const [submitting,    setSubmitting]    = useState(false);
   const [submitted,     setSubmitted]     = useState(false);
   const [submitError,   setSubmitError]   = useState('');
+  const [isHoldReopen,  setIsHoldReopen]  = useState(false);
+  const [msLeft,        setMsLeft]        = useState<number | null>(null);
 
   useEffect(() => {
     if (!token) { setTokenError('invalid'); return; }
@@ -164,12 +166,42 @@ export default function FeedbackFormPage() {
           setTokenError('already_submitted');
         } else {
           setPayload({ ...parsed, skills: parsed.skills || [], candidateEmail: result.candidateEmail || '', candidateName: result.candidateName || parsed.candidateName });
+
+          if (result.isHold) {
+            setIsHoldReopen(true);
+            const prev = result.previousFeedback;
+            if (prev) {
+              setNotes(prev.notes || '');
+              if (parsed.round === 'round1' || parsed.round === 'technical') {
+                setTechRating(prev.techSkill ? Number(prev.techSkill) : null);
+                setCommRating(prev.communication ? Number(prev.communication) : null);
+              }
+            }
+          }
                 }
               })
               .catch(() => {
                 setPayload({ ...parsed, skills: parsed.skills || [] });
               });
   }, [token]);
+
+  useEffect(() => {
+    if (!payload?.exp) return;
+    const tick = () => setMsLeft(Math.max(0, payload.exp - Date.now()));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [payload?.exp]);
+
+  const formatCountdown = (ms: number) => {
+    const totalMins = Math.floor(ms / 60000);
+    const days  = Math.floor(totalMins / 1440);
+    const hours = Math.floor((totalMins % 1440) / 60);
+    const mins  = totalMins % 60;
+    if (days > 0)  return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+  };
 
   const isTechRound = payload?.round === 'round1' || payload?.round === 'technical';
   const isHrRound   = payload?.round === 'hr';
@@ -189,7 +221,8 @@ export default function FeedbackFormPage() {
     ? roleFitRating !== null && aptRating !== null 
     : false;
 
-  const canSubmit = requiredFilled && verdict !== null;
+  const expired = msLeft !== null && msLeft <= 0;
+  const canSubmit = requiredFilled && verdict !== null && !expired;
 
   useEffect(() => {
     if (verdict === 'advance' && (!requiredFilled || overallRating < 2.5)) {
@@ -390,6 +423,27 @@ export default function FeedbackFormPage() {
             </div>
           </div>
 
+          {isHoldReopen && msLeft !== null && (
+            <div style={{
+              background: msLeft < 24 * 3600 * 1000 ? '#FEF2F2' : '#EFF6FF',
+              border: `0.5px solid ${msLeft < 24 * 3600 * 1000 ? '#FCA5A5' : '#BFDBFE'}`,
+              borderRadius: 8, padding: '12px 16px', marginBottom: 24,
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <PauseCircle size={18} color={msLeft < 24 * 3600 * 1000 ? '#DC2626' : '#3B82F6'} />
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>
+                  This candidate is on hold — please finalize your decision.
+                </div>
+                <div style={{ fontSize: 11, color: msLeft < 24 * 3600 * 1000 ? '#DC2626' : '#6B7280', marginTop: 2 }}>
+                  {msLeft > 0
+                    ? `This link expires in ${formatCountdown(msLeft)}. Advance or reject the candidate before then.`
+                    : `This link has expired. Please contact HR for a new one.`}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div style={{ marginBottom: 24 }}>
             <label style={{ fontSize: 12, fontWeight: 600, color: '#111827', display: 'block', marginBottom: 10 }}>
               Performance Metrics <span style={{ color: '#DC2626' }}>*</span>
@@ -423,7 +477,7 @@ export default function FeedbackFormPage() {
             <div style={{ marginBottom: 20 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#111827', display: 'block', marginBottom: 6 }}>Mandatory Job Skills Verified</label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {payload.skills.map(s => (
+                {payload.skills?.map(s => (
                   <span key={s} style={{ fontSize: 10, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#EFF6FF', color: '#1E40AF', border: '0.5px solid #BFDBFE' }}>
                     {s}
                   </span>
@@ -534,7 +588,7 @@ export default function FeedbackFormPage() {
               cursor: canSubmit ? 'pointer' : 'not-allowed', transition: 'all .2s',
             }}
           >
-            {submitting ? 'Processing Submission…' : 'Finalize & Log Feedback'}
+            {submitting ? 'Processing Submission…' : expired ? 'Link Expired' : 'Finalize & Log Feedback'}
           </button>
         </div>
       </div>

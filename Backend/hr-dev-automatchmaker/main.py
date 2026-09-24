@@ -57,6 +57,7 @@ CANDIDATE_EMAIL_TEMPLATE = """
       </table>
     </div>
     <a href="{meet_link}" style="display:inline-block;background:#F07C2D;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:20px;">Join Google Meet</a>
+    <a href="{review_link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-left:10px;margin-bottom:20px;">Rate Your Interview Experience</a>
     <p style="margin:0;font-size:13px;color:#6B7280;line-height:1.6;">Please join the meeting on time. If you have any questions, feel free to reach out.</p>
     <p style="margin:16px 0 0;font-size:13px;color:#374151;">Best regards,<br><strong>Atgeir Solutions Hiring Team</strong></p>
   </div>
@@ -85,9 +86,9 @@ INTERVIEWER_EMAIL_TEMPLATE = """
         <tr><td style="padding:6px 0;font-size:13px;color:#6B7280;">Mode</td><td style="padding:6px 0;font-size:13px;font-weight:600;color:#111827;">{mode}</td></tr>
       </table>
     </div>
-    <div style="display:flex;gap:12px;margin-bottom:20px;">
+    <div style="margin-bottom:20px;">
       <a href="{meet_link}" style="display:inline-block;background:#F07C2D;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;">Join Google Meet</a>
-      <a href="{review_link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;">Rate Interview Experience</a>
+      <a href="{feedback_link}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-left:10px;">Submit Feedback</a>
     </div>
     <p style="margin:0;font-size:13px;color:#6B7280;line-height:1.6;">Please join the meeting on time. After your interview concludes, we would love your candid feedback via the button above.</p>
     <p style="margin:16px 0 0;font-size:13px;color:#374151;">Best regards,<br><strong>Atgeir Solutions HR Team</strong></p>
@@ -336,8 +337,8 @@ def auto_matchmaker(request):
             "meet_link": meet_link,
         }
 
-        candidate_html = fill_template(CANDIDATE_EMAIL_TEMPLATE, common_fields)
-        interviewer_html = fill_template(INTERVIEWER_EMAIL_TEMPLATE, {**common_fields, "feedback_link": feedback_link, "review_link": review_link})
+        candidate_html = fill_template(CANDIDATE_EMAIL_TEMPLATE, {**common_fields, "review_link": review_link})
+        interviewer_html = fill_template(INTERVIEWER_EMAIL_TEMPLATE, {**common_fields, "feedback_link": feedback_link})
 
         candidate_email_sent = send_email(
             to_email=candidate_email,

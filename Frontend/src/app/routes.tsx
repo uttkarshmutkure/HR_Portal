@@ -12,6 +12,7 @@ import CandidateSlotPage       from "./pages/Candidateslotpage";
 import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IMPORT
 import LoginPage               from "./pages/LoginPage";
 import ProtectedRoute          from "./components/ProtectedRoute";
+import CandidateReviewPage     from "./pages/CandidateReviewPage";
 
 // ── Import the Global Hub Pages ──
 import { 
@@ -134,15 +135,15 @@ export const router = createBrowserRouter([
     Component: FeedbackFormPage,
   },
 
-  // ── Public candidate review link (no auth) — reuses the same feedback form ──
-  {
-    path: "/candidate-review/:token",
-    Component: FeedbackFormPage,
-  },
-
   // ── Public slot selection link (no auth) ──
   {
     path: "/schedule/:token",
     Component: CandidateSlotPage,
+  },
+
+  // ── Public candidate review link (no auth) ──
+  {
+    path: "/candidate-review/:token",
+    Component: CandidateReviewPage,
   },
 ]);
