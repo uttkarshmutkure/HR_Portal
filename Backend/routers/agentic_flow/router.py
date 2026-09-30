@@ -22,7 +22,7 @@ from bigquery_client import bq_client
 from gcs_client import gcs_client
 from routers.agentic_flow.orchestrator import pipeline_agent
 from shared.jd_processing import _process_jd_to_row
-from shared.resume_processing import process_resume_from_gcs, _is_already_processed
+from shared.resume_processing import process_resume_from_gcs, _is_path_already_processed
 
 router = APIRouter()
 
@@ -186,7 +186,7 @@ def _sync_new_resumes_from_bucket(job_id: str) -> int:
 
     new_count = 0
     for file_path in pdf_blobs:
-        if _is_already_processed(file_path, job_id):
+        if _is_path_already_processed(file_path, job_id):
             continue
         try:
             process_resume_from_gcs(BUCKET_NAME, file_path, job_id)
