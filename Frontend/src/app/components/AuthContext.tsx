@@ -2,7 +2,7 @@ import { createContext, useContext, useState, ReactNode } from "react";
 import { signInWithPopup, signOut } from "firebase/auth";
 import { auth, googleProvider } from "../../firebase";
 
-export type Role = "hr" | "interviewer";
+export type Role = "hr" | "interviewer" | "superuser";
 
 interface AuthUser {
   id: string;

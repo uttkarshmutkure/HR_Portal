@@ -146,7 +146,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { ArrowRight, ArrowLeft, Building2, UserSquare2 } from "lucide-react";
+import { ArrowRight, ArrowLeft, Building2, UserSquare2, ShieldCheck } from "lucide-react";
 import { useAuth, Role } from "../components/AuthContext";
 
 // ── Design tokens (shared with landing page) ───────────────────────────────
@@ -292,7 +292,7 @@ export default function LoginPage() {
       return;
     }
 
-    navigate(role === "hr" ? "/dashboard" : "/jobs");
+      navigate(role === "superuser" ? "/dashboard" : "/jobs");
   }
 
   return (
@@ -370,7 +370,7 @@ export default function LoginPage() {
         <p style={{ fontSize: "11px", fontWeight: 600, color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "10px" }}>
           I am logging in as
         </p>
-        <div style={{ display: "flex", gap: "10px", marginBottom: "24px" }}>
+                <div style={{ display: "flex", gap: "10px", marginBottom: "24px" }}>
           <RoleOption
             active={role === "hr"}
             icon={Building2}
@@ -384,6 +384,13 @@ export default function LoginPage() {
             label="Interviewer"
             sub="Your interviews"
             onClick={() => setRole("interviewer")}
+          />
+          <RoleOption
+            active={role === "superuser"}
+            icon={ShieldCheck}
+            label="Superuser"
+            sub="Admin panel"
+            onClick={() => setRole("superuser")}
           />
         </div>
 

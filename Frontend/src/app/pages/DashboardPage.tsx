@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { Briefcase, Users, Award, Clock, Loader2, ArrowRight, X, MoreHorizontal, Check } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
+import UsersTab from '../components/admin/UsersTab';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const T = {
@@ -183,6 +184,7 @@ function CompactJobRow({ job, isSelected, onToggle, onManage, onRefresh }: {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const [mainTab, setMainTab]               = useState<'overview' | 'users' | 'jobs'>('overview');
   const [refreshJobsKey, setRefreshJobsKey] = useState(0);
   const [jobs, setJobs]                     = useState<JobSummary[]>([]);
   const [loadingJobs, setLoadingJobs]       = useState(true);
@@ -310,145 +312,171 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ── Stat cards ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
-          {selectedJobId ? (
-            <StatCard icon={Briefcase} accent={T.orange} bg={T.orangeLight}
-              value={selectedJobObj?.status.toLowerCase() === 'active' ? 'Active' : 'Closed'}
-              label="Job Status" trend="Selected" />
-          ) : (
-            <StatCard icon={Briefcase} accent={T.orange} bg={T.orangeLight}
-              value={stats.activeJobs} label="Active jobs"
-              trend={stats.activeJobs > 0 ? 'Live' : undefined} />
-          )}
-          <StatCard icon={Users}  accent={T.blue}   bg={T.blueBg}   value={stats.screened}    label="Candidates screened" trend={selectedJobId ? 'For this job' : 'All Jobs'} />
-          <StatCard icon={Award}  accent={T.purple} bg={T.purpleBg} value={stats.shortlisted} label="Shortlisted"          trend={`${stats.passRate}% pass rate`} />
-          <StatCard icon={Clock}  accent={T.green}  bg={T.greenBg}  value={stats.interviews}  label="In interviews"        trend="Active pipeline" />
+        {/* ── Admin section tabs ── */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '18px', borderBottom: `1px solid ${T.gray200}` }}>
+          {(['overview', 'users', 'jobs'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setMainTab(tab)}
+              style={{
+                padding: '10px 16px', fontSize: '13px', fontWeight: 500, fontFamily: T.font,
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: mainTab === tab ? T.orange : T.gray600,
+                borderBottom: mainTab === tab ? `2px solid ${T.orange}` : '2px solid transparent',
+                marginBottom: '-1px', textTransform: 'capitalize',
+              }}
+            >
+              {tab}
+            </button>
+          ))}
         </div>
 
-        {/* ── Main grid ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 290px', gap: '14px', alignItems: 'start' }}>
+        {mainTab === 'users' && <UsersTab />}
+        {mainTab === 'jobs' && <div style={{ padding: '40px', textAlign: 'center', color: T.gray400 }}>Jobs tab coming next.</div>}
 
-          {/* Jobs list panel — no overflow:hidden so the dropdown menu isn't clipped */}
-          <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px' }}>
-
-            {/* Panel header */}
-            <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '10px 10px 0 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                {(['all', 'active', 'closed'] as const).map(tab => {
-                  const label = tab === 'all' ? 'Recent Jobs' : tab === 'active' ? 'Active' : 'Closed';
-                  const active = jobTab === tab;
-                  return (
-                    <button key={tab} onClick={() => setJobTab(tab)} style={{
-                      padding: '4px 11px', borderRadius: '5px', fontSize: '12px', fontWeight: 500,
-                      cursor: 'pointer', fontFamily: T.font, transition: 'all 0.12s',
-                      background: active ? T.navy    : 'transparent',
-                      color:      active ? T.white   : T.gray600,
-                      border:     active ? 'none'    : '0.5px solid transparent',
-                    }}>
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Original right-side controls: clear selection OR Manage All Jobs */}
+        {mainTab === 'overview' && (
+          <>
+            {/* ── Stat cards ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
               {selectedJobId ? (
-                <button onClick={() => setSelectedJobId(null)} style={{ fontSize: '11px', color: T.gray600, background: 'rgba(29,25,75,0.05)', padding: '4px 8px', borderRadius: '5px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500, fontFamily: T.font }}>
-                  Clear selection <X size={10} />
-                </button>
+                <StatCard icon={Briefcase} accent={T.orange} bg={T.orangeLight}
+                  value={selectedJobObj?.status.toLowerCase() === 'active' ? 'Active' : 'Closed'}
+                  label="Job Status" trend="Selected" />
               ) : (
-                <button onClick={() => navigate('/jobs')} style={{ fontSize: '11px', color: T.orange, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500, fontFamily: T.font }}>
-                  Manage All Jobs <ArrowRight size={10} />
-                </button>
+                <StatCard icon={Briefcase} accent={T.orange} bg={T.orangeLight}
+                  value={stats.activeJobs} label="Active jobs"
+                  trend={stats.activeJobs > 0 ? 'Live' : undefined} />
               )}
+              <StatCard icon={Users}  accent={T.blue}   bg={T.blueBg}   value={stats.screened}    label="Candidates screened" trend={selectedJobId ? 'For this job' : 'All Jobs'} />
+              <StatCard icon={Award}  accent={T.purple} bg={T.purpleBg} value={stats.shortlisted} label="Shortlisted"          trend={`${stats.passRate}% pass rate`} />
+              <StatCard icon={Clock}  accent={T.green}  bg={T.greenBg}  value={stats.interviews}  label="In interviews"        trend="Active pipeline" />
             </div>
 
-            {/* Rows */}
-            {loadingJobs ? (
-              <div style={{ padding: '48px', display: 'flex', justifyContent: 'center' }}>
-                <Loader2 size={16} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
-              </div>
-            ) : filteredJobs.length === 0 ? (
-              <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-                <Briefcase size={24} color={T.gray200} style={{ margin: '0 auto 8px', display: 'block' }} />
-                <p style={{ fontSize: '12px', color: T.gray400, fontFamily: T.font, margin: 0 }}>
-                  No {jobTab !== 'all' ? jobTab : ''} jobs found
-                </p>
-              </div>
-            ) : (
-              filteredJobs.map(job => (
-                <CompactJobRow
-                  key={job.job_id}
-                  job={job}
-                  isSelected={selectedJobId === job.job_id}
-                  onToggle={() => setSelectedJobId(selectedJobId === job.job_id ? null : job.job_id)}
-                  onManage={() => navigate('/jobs', { state: { expandJobId: job.job_id } })}
-                  onRefresh={() => setRefreshJobsKey(k => k + 1)}
-                />
-              ))
-            )}
-          </div>
+            {/* ── Main grid ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 290px', gap: '14px', alignItems: 'start' }}>
 
-          {/* Right sidebar */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Jobs list panel — no overflow:hidden so the dropdown menu isn't clipped */}
+              <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px' }}>
 
-            {/* Pipeline funnel */}
-            <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px', overflow: 'hidden' }}>
-              <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: T.font }}>Pipeline funnel</span>
-                {selectedJobId && <span style={{ fontSize: '9px', color: T.orange, background: T.orangeLight, padding: '2px 6px', borderRadius: '4px', fontFamily: T.font }}>Filtered</span>}
-              </div>
-              <div style={{ padding: '12px 14px' }}>
-                {loadingMetrics ? (
-                  <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0' }}>
-                    <Loader2 size={14} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
+                {/* Panel header */}
+                <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '10px 10px 0 0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    {(['all', 'active', 'closed'] as const).map(tab => {
+                      const label = tab === 'all' ? 'Recent Jobs' : tab === 'active' ? 'Active' : 'Closed';
+                      const active = jobTab === tab;
+                      return (
+                        <button key={tab} onClick={() => setJobTab(tab)} style={{
+                          padding: '4px 11px', borderRadius: '5px', fontSize: '12px', fontWeight: 500,
+                          cursor: 'pointer', fontFamily: T.font, transition: 'all 0.12s',
+                          background: active ? T.navy    : 'transparent',
+                          color:      active ? T.white   : T.gray600,
+                          border:     active ? 'none'    : '0.5px solid transparent',
+                        }}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Original right-side controls: clear selection OR Manage All Jobs */}
+                  {selectedJobId ? (
+                    <button onClick={() => setSelectedJobId(null)} style={{ fontSize: '11px', color: T.gray600, background: 'rgba(29,25,75,0.05)', padding: '4px 8px', borderRadius: '5px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500, fontFamily: T.font }}>
+                      Clear selection <X size={10} />
+                    </button>
+                  ) : (
+                    <button onClick={() => navigate('/jobs')} style={{ fontSize: '11px', color: T.orange, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 500, fontFamily: T.font }}>
+                      Manage All Jobs <ArrowRight size={10} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Rows */}
+                {loadingJobs ? (
+                  <div style={{ padding: '48px', display: 'flex', justifyContent: 'center' }}>
+                    <Loader2 size={16} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
+                  </div>
+                ) : filteredJobs.length === 0 ? (
+                  <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                    <Briefcase size={24} color={T.gray200} style={{ margin: '0 auto 8px', display: 'block' }} />
+                    <p style={{ fontSize: '12px', color: T.gray400, fontFamily: T.font, margin: 0 }}>
+                      No {jobTab !== 'all' ? jobTab : ''} jobs found
+                    </p>
                   </div>
                 ) : (
-                  funnelStages.map((s, i) => (
-                    <div key={s.label} style={{ marginBottom: i < funnelStages.length - 1 ? '10px' : 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '11px', color: T.gray600, fontFamily: T.font }}>{s.label}</span>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: T.text, fontFamily: T.font }}>{s.n}</span>
-                      </div>
-                      <div style={{ height: '5px', background: T.gray100, borderRadius: '3px', overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${s.pct}%`, background: s.color, borderRadius: '3px', transition: 'width 0.5s ease' }} />
-                      </div>
-                    </div>
+                  filteredJobs.map(job => (
+                    <CompactJobRow
+                      key={job.job_id}
+                      job={job}
+                      isSelected={selectedJobId === job.job_id}
+                      onToggle={() => setSelectedJobId(selectedJobId === job.job_id ? null : job.job_id)}
+                      onManage={() => navigate('/jobs', { state: { expandJobId: job.job_id } })}
+                      onRefresh={() => setRefreshJobsKey(k => k + 1)}
+                    />
                   ))
                 )}
               </div>
-            </div>
 
-            {/* Activity feed */}
-            <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px', overflow: 'hidden' }}>
-              <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: T.font }}>Activity</span>
-                {selectedJobId && <span style={{ fontSize: '9px', color: T.orange, background: T.orangeLight, padding: '2px 6px', borderRadius: '4px', fontFamily: T.font }}>Filtered</span>}
-              </div>
-              {loadingMetrics ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}>
-                  <Loader2 size={14} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
-                </div>
-              ) : (
-                activityFeed.map((item, i) => (
-                  <div key={i} style={{
-                    display: 'flex', gap: '10px', padding: '9px 14px',
-                    borderBottom: i < activityFeed.length - 1 ? `0.5px solid ${T.gray100}` : 'none',
-                    alignItems: 'flex-start',
-                  }}>
-                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.color, marginTop: '4px', flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '11px', color: T.text, fontFamily: T.font, lineHeight: 1.45 }}>{item.text}</div>
-                      <div style={{ fontSize: '10px', color: T.gray400, fontFamily: T.font, marginTop: '1px' }}>{item.time}</div>
-                    </div>
+              {/* Right sidebar */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                {/* Pipeline funnel */}
+                <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px', overflow: 'hidden' }}>
+                  <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: T.font }}>Pipeline funnel</span>
+                    {selectedJobId && <span style={{ fontSize: '9px', color: T.orange, background: T.orangeLight, padding: '2px 6px', borderRadius: '4px', fontFamily: T.font }}>Filtered</span>}
                   </div>
-                ))
-              )}
-            </div>
+                  <div style={{ padding: '12px 14px' }}>
+                    {loadingMetrics ? (
+                      <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0' }}>
+                        <Loader2 size={14} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
+                      </div>
+                    ) : (
+                      funnelStages.map((s, i) => (
+                        <div key={s.label} style={{ marginBottom: i < funnelStages.length - 1 ? '10px' : 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '11px', color: T.gray600, fontFamily: T.font }}>{s.label}</span>
+                            <span style={{ fontSize: '11px', fontWeight: 600, color: T.text, fontFamily: T.font }}>{s.n}</span>
+                          </div>
+                          <div style={{ height: '5px', background: T.gray100, borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${s.pct}%`, background: s.color, borderRadius: '3px', transition: 'width 0.5s ease' }} />
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-          </div>
-        </div>
+                {/* Activity feed */}
+                <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px', overflow: 'hidden' }}>
+                  <div style={{ padding: '11px 16px', borderBottom: `0.5px solid ${T.gray100}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: T.text, fontFamily: T.font }}>Activity</span>
+                    {selectedJobId && <span style={{ fontSize: '9px', color: T.orange, background: T.orangeLight, padding: '2px 6px', borderRadius: '4px', fontFamily: T.font }}>Filtered</span>}
+                  </div>
+                  {loadingMetrics ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: '20px' }}>
+                      <Loader2 size={14} color={T.orange} style={{ animation: 'spin 1s linear infinite' }} />
+                    </div>
+                  ) : (
+                    activityFeed.map((item, i) => (
+                      <div key={i} style={{
+                        display: 'flex', gap: '10px', padding: '9px 14px',
+                        borderBottom: i < activityFeed.length - 1 ? `0.5px solid ${T.gray100}` : 'none',
+                        alignItems: 'flex-start',
+                      }}>
+                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.color, marginTop: '4px', flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '11px', color: T.text, fontFamily: T.font, lineHeight: 1.45 }}>{item.text}</div>
+                          <div style={{ fontSize: '10px', color: T.gray400, fontFamily: T.font, marginTop: '1px' }}>{item.time}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       <style>{`
