@@ -4,6 +4,7 @@ import { Briefcase, Users, Award, Clock, Loader2, ArrowRight, X, MoreHorizontal,
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
 import UsersTab from '../components/admin/UsersTab';
+import JobsTab from '../components/admin/JobsTab';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const T = {
@@ -184,7 +185,8 @@ function CompactJobRow({ job, isSelected, onToggle, onManage, onRefresh }: {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const [mainTab, setMainTab]               = useState<'overview' | 'users' | 'jobs'>('overview');
+  const [mainTab, setMainTab] = useState<'overview' | 'users' | 'jobs'>('overview');
+
   const [refreshJobsKey, setRefreshJobsKey] = useState(0);
   const [jobs, setJobs]                     = useState<JobSummary[]>([]);
   const [loadingJobs, setLoadingJobs]       = useState(true);
@@ -302,12 +304,17 @@ export default function DashboardPage() {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '18px' }}>
           <div>
             <div style={{ fontSize: '15px', fontWeight: 600, color: T.text, letterSpacing: '-0.02em', fontFamily: T.font }}>
-              {selectedJobObj ? `Job Metrics: ${selectedJobObj.title}` : 'Screening Dashboard'}
+              {mainTab === 'overview'
+                ? (selectedJobObj ? `Job Metrics: ${selectedJobObj.title}` : 'Screening Dashboard')
+                : mainTab === 'users' ? 'User Access' : 'Job Postings'}
             </div>
             <div style={{ fontSize: '11px', color: T.textSub, marginTop: '2px', fontFamily: T.font }}>
-              {selectedJobObj
-                ? `Filtering dashboard for ${selectedJobObj.location ?? 'this role'}`
-                : `${today} · ${stats.activeJobs} active position${stats.activeJobs !== 1 ? 's' : ''}`}
+              {mainTab === 'overview'
+                ? (selectedJobObj
+                    ? `Filtering dashboard for ${selectedJobObj.location ?? 'this role'}`
+                    : `${today} · ${stats.activeJobs} active position${stats.activeJobs !== 1 ? 's' : ''}`)
+                : mainTab === 'users' ? 'Grant access, assign roles, and manage account status'
+                : 'Create, edit, archive and restore job postings'}
             </div>
           </div>
         </div>
@@ -332,7 +339,7 @@ export default function DashboardPage() {
         </div>
 
         {mainTab === 'users' && <UsersTab />}
-        {mainTab === 'jobs' && <div style={{ padding: '40px', textAlign: 'center', color: T.gray400 }}>Jobs tab coming next.</div>}
+        {mainTab === 'jobs' && <JobsTab />}
 
         {mainTab === 'overview' && (
           <>
