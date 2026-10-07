@@ -224,6 +224,7 @@ function FeedbackCard({ item, defaultExpanded = false, showJobTitle = true }: { 
   const [expanded, setExpanded] = useState(defaultExpanded);
   const av = getAvColor(item.candidate.name);
   const isAdvance = item.verdict === 'advance';
+  const isHold = item.verdict === 'hold';
   const roundStyle = ROUND_STYLE[item.round] ?? { bg: '#F3F4F6', color: '#374151' };
   const roundLabel = ROUND_LABELS[item.round] ?? item.round;
 
@@ -256,9 +257,9 @@ function FeedbackCard({ item, defaultExpanded = false, showJobTitle = true }: { 
               {roundLabel}
             </span>
             {/* Verdict badge */}
-            <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '20px', display: 'inline-flex', alignItems: 'center', gap: '3px', background: isAdvance ? '#ECFDF5' : '#FEF2F2', color: isAdvance ? '#059669' : '#DC2626' }}>
-              {isAdvance ? <Check size={9} /> : <X size={9} />}
-              {isAdvance ? 'Advanced' : 'Rejected'}
+            <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '20px', display: 'inline-flex', alignItems: 'center', gap: '3px', background: isAdvance ? '#ECFDF5' : isHold ? '#FFFBEB' : '#FEF2F2', color: isAdvance ? '#059669' : isHold ? '#D97706' : '#DC2626' }}>
+              {isAdvance ? <Check size={9} /> : isHold ? <Clock size={9} /> : <X size={9} />}
+              {isAdvance ? 'Advanced' : isHold ? 'On Hold' : 'Rejected'}
             </span>
           </div>
           <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '2px' }}>
@@ -401,8 +402,9 @@ function SearchBox({ value, onChange, placeholder, width = '260px' }: { value: s
 
 // ── Per-job feedback summary card (for the job picker view) ──────────────────
 function JobFeedbackCard({ job, items, onClick }: { job: JobSummary; items: FeedbackItem[]; onClick: () => void }) {
-  const advanced  = items.filter(f => f.verdict === 'advance').length;
-  const rejected  = items.filter(f => f.verdict !== 'advance').length;
+  const advanced = items.filter(f => f.verdict === 'advance').length;
+  const onHold   = items.filter(f => f.verdict === 'hold').length;
+  const rejected = items.filter(f => f.verdict !== 'advance' && f.verdict !== 'hold').length;
   const ratedItems = items.filter(f => f.rating != null);
   const avgRating = ratedItems.length > 0
     ? (ratedItems.reduce((s, f) => s + (f.rating ?? 0), 0) / ratedItems.length).toFixed(1)
@@ -422,7 +424,7 @@ function JobFeedbackCard({ job, items, onClick }: { job: JobSummary; items: Feed
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{job.title}</div>
           <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>
-            {items.length} submission{items.length !== 1 ? 's' : ''} · {advanced} advanced · {rejected} rejected
+            {items.length} submission{items.length !== 1 ? 's' : ''} · {advanced} advanced · {onHold} on hold · {rejected} rejected
           </div>
         </div>
       </div>
@@ -449,7 +451,7 @@ export function GlobalFeedbackPage() {
   const [jobSearch, setJobSearch]     = useState('');
   const [candSearch, setCandSearch]   = useState('');
 
-  const [filter, setFilter]           = useState<'all' | 'advanced' | 'rejected'>('all');
+  const [filter, setFilter] = useState<'all' | 'advanced' | 'onhold' | 'rejected'>('all');
   const [roundFilter, setRoundFilter] = useState<'all' | 'round1' | 'technical' | 'hr'>('all');
 
   useEffect(() => {
@@ -572,7 +574,12 @@ export function GlobalFeedbackPage() {
     if (!selectedGroup) return [];
     const q = candSearch.trim().toLowerCase();
     return selectedGroup.items
-      .filter(f => filter === 'all' ? true : filter === 'advanced' ? f.verdict === 'advance' : f.verdict !== 'advance')
+      .filter(f => {
+        if (filter === 'all') return true;
+        if (filter === 'advanced') return f.verdict === 'advance';
+        if (filter === 'onhold') return f.verdict === 'hold';
+        return f.verdict !== 'advance' && f.verdict !== 'hold'; // rejected
+      })
       .filter(f => roundFilter === 'all' ? true : f.round === roundFilter)
       .filter(f => !q || f.candidate.name.toLowerCase().includes(q) || (f.candidate.email || '').toLowerCase().includes(q));
   }, [selectedGroup, filter, roundFilter, candSearch]);
@@ -670,8 +677,9 @@ export function GlobalFeedbackPage() {
   }
 
   // ── VIEW 2: Feedback within the selected job ────────────────────────────────
-  const advanced  = selectedGroup.items.filter(f => f.verdict === 'advance').length;
-  const rejected  = selectedGroup.items.filter(f => f.verdict !== 'advance').length;
+  const advanced = selectedGroup.items.filter(f => f.verdict === 'advance').length;
+  const onHold   = selectedGroup.items.filter(f => f.verdict === 'hold').length;
+  const rejected = selectedGroup.items.filter(f => f.verdict !== 'advance' && f.verdict !== 'hold').length;
   const ratedItems = selectedGroup.items.filter(f => f.rating != null);
   const avgRating = ratedItems.length > 0
     ? (ratedItems.reduce((s, f) => s + (f.rating ?? 0), 0) / ratedItems.length).toFixed(1)
@@ -699,6 +707,7 @@ export function GlobalFeedbackPage() {
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <StatPill value={selectedGroup.items.length} label="Total"    color="#111827" />
           <StatPill value={advanced}                   label="Advanced" color="#059669" />
+          <StatPill value={onHold}                     label="On Hold"  color="#D97706" />
           <StatPill value={rejected}                   label="Rejected" color="#DC2626" />
           <StatPill value={avgRating}                  label="Avg Rating" color="#F07C2D" />
         </div>
@@ -723,6 +732,7 @@ export function GlobalFeedbackPage() {
                 options={[
                   { key: 'all', label: 'All' },
                   { key: 'advanced', label: 'Advanced' },
+                  { key: 'onhold', label: 'On Hold' },
                   { key: 'rejected', label: 'Rejected' },
                 ]}
               />
@@ -750,6 +760,7 @@ export function GlobalFeedbackPage() {
                 options={[
                   { key: 'all', label: 'All' },
                   { key: 'advanced', label: 'Advanced' },
+                  { key: 'onhold', label: 'On Hold' },
                   { key: 'rejected', label: 'Rejected' },
                 ]}
               />

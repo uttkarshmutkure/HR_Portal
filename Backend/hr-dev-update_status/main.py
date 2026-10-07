@@ -47,7 +47,8 @@ ALLOWED_TRANSITIONS = {
     "Passed":       {"Shortlisted", "Rejected"},
     "Human Review": {"Shortlisted", "Rejected"},
     "Shortlisted":  {"Interview", "Rejected"},
-    "Interview":    {"Selected",  "Rejected"},
+    "Interview":    {"Selected",  "Rejected", "Hired"},
+    "Selected":     {"Hired", "Rejected"},
 }
 # Archive / Selected / Rejected are terminal — no further moves allowed.
 

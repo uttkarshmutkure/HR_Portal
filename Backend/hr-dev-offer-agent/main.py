@@ -2,7 +2,8 @@ import os
 import json
 import asyncio
 import requests
-
+import secrets
+from typing import Optional
 # ── Must be set BEFORE any ADK/genai imports ───────────────────────os.environ["GOOGLE_CLOUD_LOCATION"]     = "global"──────────
 # ADK reads these env vars at import time to decide Vertex AI vs Gemini API.
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
@@ -27,6 +28,10 @@ project_id    = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
 dataset_id    = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
 email_api_url = os.environ.get('EMAIL_API_URL', 'https://wb-gateway-7xpbhfkr.an.gateway.dev/hr-screening/send-email')
 test_email    = os.environ.get('TEST_EMAIL', '')
+# Public URL of THIS cloud function (used to build the accept/reject links in the email).
+# Set this in the function's env vars after first deploy, e.g.
+# https://REGION-PROJECT.cloudfunctions.net/offer_agent
+RESPONSE_BASE_URL = os.environ.get('RESPONSE_BASE_URL', '')
 
 MODEL    = "gemini-3.5-flash"
 APP_NAME = "offer_agent_app"
@@ -88,20 +93,34 @@ OFFER_EMAIL_TEMPLATE = """
 # TOOLS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def send_email_tool(to_email: str, subject: str, html_body: str) -> str:
+def send_email_tool(to_email: str, subject: str, html_body: str, attachments: Optional[list] = None) -> str:
     actual_recipient = test_email if test_email else to_email
     try:
-        res = requests.post(
-            email_api_url,
-            json={"to": actual_recipient, "subject": subject, "body": html_body},
-            timeout=10
-        )
+        payload = {"to": actual_recipient, "subject": subject, "body": html_body}
+        if attachments:
+            payload["attachments"] = attachments
+        res = requests.post(email_api_url, json=payload, timeout=60)
         if res.status_code == 200:
             return "Email sent successfully."
         return f"Failed with status: {res.status_code}"
     except Exception as e:
         return f"Email send error: {str(e)}"
 
+def _to_iso_date(date_str: str) -> str:
+    """Convert a human-typed date like '1 October 2026' into 'YYYY-MM-DD' for
+    BigQuery's DATE column. Falls back to None if it can't be parsed, so the
+    save doesn't crash — HR can fix the date and resend."""
+    if not date_str:
+        return None
+    date_str = date_str.strip()
+    formats = ["%d %B %Y", "%d %b %Y", "%Y-%m-%d", "%d/%m/%Y", "%B %d, %Y", "%b %d, %Y"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    print(f"[offer_agent] Could not parse joining_date: '{date_str}'")
+    return None
 
 def save_offer_to_db(
     job_id: str,
@@ -116,7 +135,7 @@ def save_offer_to_db(
     probation: str,
     reporting_manager: str,
     offer_html: str,
-    breakup: dict = None,
+    breakup: Optional[dict] = None,
     salary_rules_json: str = "",
     status: str = "sent",
     employee_type: str = "regular",
@@ -141,7 +160,7 @@ def save_offer_to_db(
             "designation":           designation,
             "base_ctc":              base_ctc,
             "variable_pay":          variable_pay,
-            "joining_date":          joining_date or None,
+            "joining_date":          _to_iso_date(joining_date),
             "work_location":         work_location,
             "probation":             probation,
             "reporting_manager":     reporting_manager,
@@ -193,6 +212,51 @@ def save_offer_to_db(
         return f"DB save error: {str(e)}"
 
 
+def _set_offer_response_token(job_id: str, candidate_id: str, validity_days: int) -> dict:
+    """Generate a fresh accept/reject token for this offer, store it + a 7(ish)-day
+    expiry in BigQuery, and return the token plus ready-to-use email links.
+    Called once per offer generation, so re-sending an offer invalidates old links."""
+    token = secrets.token_urlsafe(24)
+    expiry = (datetime.now(timezone.utc) + timedelta(days=validity_days)).isoformat()
+
+    table = f"{project_id}.{dataset_id}.offer_letters"
+    update_q = f"""
+        UPDATE `{table}`
+        SET offer_token = @token,
+            offer_expiry = @expiry,
+            response_status = 'pending',
+            responded_at = NULL
+        WHERE job_id = @job_id AND candidate_id = @candidate_id
+    """
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("token", "STRING", token),
+        bigquery.ScalarQueryParameter("expiry", "STRING", expiry),
+        bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+        bigquery.ScalarQueryParameter("candidate_id", "STRING", candidate_id),
+    ])
+    bq_client.query(update_q, job_config=job_config).result()
+
+    accept_url = f"{RESPONSE_BASE_URL}?token={token}&action=accept"
+    reject_url = f"{RESPONSE_BASE_URL}?token={token}&action=reject"
+    return {"token": token, "accept_url": accept_url, "reject_url": reject_url}
+
+
+def _inject_offer_buttons(html: str, accept_url: str, reject_url: str) -> str:
+    """Insert Accept/Reject buttons into the already-wrapped offer email HTML,
+    right before the closing 'Best regards' line. Falls back to appending at
+    the end if that anchor text isn't found."""
+    buttons_html = f"""
+    <div style="margin:24px 0;text-align:center;">
+      <a href="{accept_url}" style="display:inline-block;margin:0 8px;padding:10px 24px;background:#16A34A;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Accept Offer</a>
+      <a href="{reject_url}" style="display:inline-block;margin:0 8px;padding:10px 24px;background:#DC2626;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Reject Offer</a>
+      <p style="margin:10px 0 0;font-size:12px;color:#9CA3AF;">This link expires in 7 days.</p>
+    </div>
+    """
+    anchor = "Best regards,<br><strong>Atgeir Solutions HR Team</strong></p>"
+    if anchor in html:
+        return html.replace(anchor, buttons_html + anchor)
+    return html + buttons_html
+
 def update_offer_draft(
     designation: str = "",
     base_ctc: str = "",
@@ -203,8 +267,8 @@ def update_offer_draft(
     reporting_manager: str = "",
     candidate_phone: str = "",
     candidate_address: str = "",
-    breakup: dict = None,
-    custom_values: dict = None,
+    breakup: Optional[dict] = None,
+    custom_values: Optional[dict] = None,
     employee_type: str = "",
     intern_end_date: str = "",
     intern_stipend: str = "",
@@ -418,7 +482,7 @@ def _build_generate_agent(cand_ctx: dict, job_ctx: dict, draft: dict, send_email
         instruction=f"""You are an HR offer letter writer. Your job is to:
 1. Write a professional, warm offer letter HTML body for the candidate.
 2. Call save_offer_to_db to save it to the database.
-3. If SEND EMAIL is True, call send_email_tool to email the candidate.
+(Do NOT send the email yourself — that is handled separately after you finish.)
  
 CANDIDATE: {cand_ctx.get('name', 'Candidate')} ({cand_ctx.get('email', '')})
 DESIGNATION: {designation}
@@ -448,9 +512,10 @@ Replace OFFER_BODY_PLACEHOLDER with the offer HTML you wrote.
 
 TOOL CALL ORDER:
 1. save_offer_to_db — pass all offer fields + the full wrapped HTML as offer_html + the full breakup dictionary (from OFFER DETAILS above, under the "breakup" key, empty {{}} if not a regular offer) + salary_rules_json (a JSON string of the SALARY RULES USED shown above) + employee_type (from OFFER DETAILS['employeeType'], default "regular") + intern_end_date/intern_stipend (from OFFER DETAILS, if employeeType is "intern") + consulting_fee_monthly/tax_percent/contract_duration (from OFFER DETAILS, if employeeType is "consultant")
-2. send_email_tool — only if SEND EMAIL is True; use subject "Offer Letter — {designation} at Atgeir Solutions"
+
+After calling save_offer_to_db, your final reply must be ONLY the full wrapped offer HTML (the same content you saved), nothing else before or after it.
 """,
-        tools=[save_offer_to_db, send_email_tool],
+        tools=[save_offer_to_db],
         generate_content_config=types.GenerateContentConfig(temperature=0.2),
     )
 
@@ -498,6 +563,69 @@ async def _run_agent_turn(agent: LlmAgent, session_id: str, user_message: str) -
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ACTION 5 — offer_response (candidate clicks Accept/Reject in the email)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _response_page(title: str, message: str, color: str) -> str:
+    return f"""
+    <html><head><title>{title}</title></head>
+    <body style="font-family:Inter,Arial,sans-serif;background:#F9FAFB;padding:60px 20px;text-align:center;">
+      <div style="max-width:420px;margin:0 auto;background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:32px;">
+        <h2 style="color:{color};margin:0 0 12px;">{title}</h2>
+        <p style="color:#374151;font-size:14px;">{message}</p>
+      </div>
+    </body></html>
+    """
+
+
+def _handle_offer_response(request, headers: dict):
+    token  = request.args.get('token', '')
+    action = request.args.get('action', '')
+    html_headers = {**headers, 'Content-Type': 'text/html'}
+
+    if not token or action not in ('accept', 'reject'):
+        return (_response_page("Invalid link", "This link is missing or malformed.", "#DC2626"), 400, html_headers)
+
+    table = f"{project_id}.{dataset_id}.offer_letters"
+    rows = list(bq_client.query(
+        f"SELECT job_id, candidate_id, offer_expiry, response_status "
+        f"FROM `{table}` WHERE offer_token = @token LIMIT 1",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("token", "STRING", token)
+        ])
+    ))
+
+    if not rows:
+        return (_response_page("Invalid link", "We couldn't find this offer. It may have been withdrawn.", "#DC2626"), 404, html_headers)
+
+    row = rows[0]
+
+    if row.response_status and row.response_status != 'pending':
+        return (_response_page("Already responded", f"This offer was already marked as '{row.response_status}'.", "#6B7280"), 200, html_headers)
+
+    expiry = row.offer_expiry
+    if expiry and datetime.fromisoformat(str(expiry)) < datetime.now(timezone.utc):
+        return (_response_page("Link expired", "This offer link has expired. Please contact HR for a new one.", "#DC2626"), 410, html_headers)
+
+    new_status = 'accepted' if action == 'accept' else 'rejected'
+    update_q = f"""
+        UPDATE `{table}`
+        SET status = @status, response_status = @status, responded_at = @now
+        WHERE job_id = @job_id AND candidate_id = @candidate_id
+    """
+    bq_client.query(update_q, job_config=bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("status", "STRING", new_status),
+        bigquery.ScalarQueryParameter("now", "STRING", datetime.now(timezone.utc).isoformat()),
+        bigquery.ScalarQueryParameter("job_id", "STRING", row.job_id),
+        bigquery.ScalarQueryParameter("candidate_id", "STRING", row.candidate_id),
+    ])).result()
+
+    if new_status == 'accepted':
+        return (_response_page("Offer Accepted", "Thank you! Your response has been recorded. Our HR team will reach out with next steps.", "#16A34A"), 200, html_headers)
+    return (_response_page("Offer Declined", "Your response has been recorded. Thank you for letting us know.", "#DC2626"), 200, html_headers)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -510,6 +638,9 @@ def offer_agent(request):
             'Access-Control-Allow-Headers': 'Content-Type'
         })
     headers = {'Access-Control-Allow-Origin': '*'}
+
+    if request.method == 'GET':
+        return _handle_offer_response(request, headers)
 
     try:
         # Handle Multipart Form Data for Custom Document Uploads
@@ -702,6 +833,9 @@ def _handle_generate(body: dict, headers: dict):
     draft        = body.get('draft', {})
     send_email   = body.get('sendEmail', False)
     salary_rules = body.get('salaryRules', {})
+    pdf_base64   = body.get('pdfBase64', '')
+    pdf_filename = body.get('pdfFilename', 'Offer_Letter.pdf')
+
     offer_validity_days = salary_rules.get('offerValidityDays', DEFAULT_SALARY_RULES['offerValidityDays'])
 
     if not job_id or not candidate_id:
@@ -726,10 +860,6 @@ def _handle_generate(body: dict, headers: dict):
         "saved to database" in str(tr["result"]).lower() or "successfully" in str(tr["result"]).lower()
         for tr in result["tool_results"] if tr["tool"] == "save_offer_to_db"
     )
-    email_sent = any(
-        "email sent" in str(tr["result"]).lower()
-        for tr in result["tool_results"] if tr["tool"] == "send_email_tool"
-    ) if send_email else False
 
     offer_html = ""
     if "<div" in response_text:
@@ -737,6 +867,48 @@ def _handle_generate(body: dict, headers: dict):
             offer_html = response_text[response_text.index("<div"):]
         except Exception:
             offer_html = response_text
+
+    email_sent = False
+    if send_email and saved_to_bq:
+        try:
+            links = _set_offer_response_token(job_id, candidate_id, offer_validity_days)
+            candidate_first_name = cand_ctx.get('name', 'Candidate').split(' ')[0]
+            designation_display = job_ctx.get('title') or draft.get('designation', 'this role')
+            simple_body = (
+                f"<p>Dear {cand_ctx.get('name', 'Candidate')},</p>"
+                f"<p>Congratulations!</p>"
+                f"<p>We are delighted to offer you the position of "
+                f"{designation_display} at Atgeir Solutions.</p>"
+                f"<p>Please find your offer letter attached with this email. Kindly review the document and "
+                f"share your acceptance within {offer_validity_days} days of receiving this offer — you can also "
+                f"use the Accept or Reject buttons below.</p>"
+                f"<p>If you have any questions regarding the offer or onboarding process, feel free to contact us.</p>"
+                f"<p>We look forward to welcoming you to the team.</p>"
+            )
+            final_html = (
+                OFFER_EMAIL_TEMPLATE
+                .replace('{support_footer}', SUPPORT_FOOTER)
+                .replace('{offer_body}', simple_body)
+            )
+            final_html = _inject_offer_buttons(final_html, links["accept_url"], links["reject_url"])
+
+            attachments = None
+            if pdf_base64:
+                attachments = [{
+                    "filename": pdf_filename,
+                    "content": pdf_base64,
+                    "encoding": "base64",
+                }]
+
+            send_result = send_email_tool(
+                cand_ctx.get('email', ''),
+                f"Offer Letter — {designation_display} at Atgeir Solutions",
+                final_html,
+                attachments,
+            )
+            email_sent = "sent successfully" in send_result.lower()
+        except Exception as e:
+            print(f"[offer_agent] offer_response token/email error: {e}")
 
     return (
         json.dumps({

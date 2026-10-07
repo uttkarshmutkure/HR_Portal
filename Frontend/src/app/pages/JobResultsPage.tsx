@@ -453,7 +453,7 @@ export default function JobResultsPage() {
             {shortlistedCount > 0 && (
               <Link
                 to={`/jobs/${jobId}/shortlisted`}
-                state={{ jdTitle: jobId }}
+                state={{ jdTitle: candidates?.job_title || jobId }}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#F07C2D', color: '#fff', border: 'none', borderRadius: '7px', padding: '8px 14px', fontSize: '12px', fontWeight: 500, fontFamily: FONT, textDecoration: 'none' }}
               >
                 <Users size={13} /> View Shortlisted ({shortlistedCount}) <ArrowRight size={13} />

@@ -16,7 +16,7 @@ bq_client = bigquery.Client()
 project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
 dataset_id = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
 email_api_url = os.environ.get('EMAIL_API_URL', 'https://wb-gateway-7xpbhfkr.an.gateway.dev/hr-screening/send-email')
-test_email = os.environ.get('TEST_EMAIL', 'mutkureu@gmail.com')
+test_email = os.environ.get('TEST_EMAIL', 'sayali.mahulkar@atgeirsolutions.com')
 
 ai_client = genai.Client(
     vertexai=True,

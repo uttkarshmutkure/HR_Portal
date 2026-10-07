@@ -10,7 +10,7 @@ import { TopCandidate } from './screening';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const IS_PROD   = import.meta.env.VITE_APP_ENV === 'production';
-const DEV_EMAIL = 'mutkureu@gmail.com';
+const DEV_EMAIL = 'sayali.mahulkar@atgeirsolutions.com';
 
 export interface EmailPayload {
   to:      string;

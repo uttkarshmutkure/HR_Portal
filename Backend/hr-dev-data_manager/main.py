@@ -419,6 +419,16 @@ def handle_candidate_data(request):
             job_id = data.get('jobId')
             if not job_id:
                 return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            
+            title_query = f"""
+                SELECT title FROM `{project_id}.{dataset_id}.jobs`
+                WHERE job_id = @job_id LIMIT 1
+            """
+            title_rows = list(bq_client.query(
+                title_query,
+                job_config=bigquery.QueryJobConfig(query_parameters=[bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)])
+            ).result())
+            job_title = title_rows[0].title if title_rows else job_id
 
             query = f"""
                 SELECT
@@ -488,6 +498,7 @@ def handle_candidate_data(request):
 
             return (json.dumps({
                 'success':          True,
+                'job_title':        job_title,
                 'top_candidates':   top,
                 'all_passed':       passed,
                 'all_human_review': review,
@@ -546,6 +557,7 @@ def handle_candidate_data(request):
                     'email':             row.email,
                     'phone':             row.phone or '',
                     'candidate_result':  row.candidate_result,
+                    'similarity_score': float(ai_data.get('similarity_score', 0)),
                     'final_score':       float(ai_data.get('final_score', 0)),
                     'overall_result':    ai_data.get('overall_result', ''),
                     'must_have_pct':     float(ai_data.get('must_have_pct', 0)),

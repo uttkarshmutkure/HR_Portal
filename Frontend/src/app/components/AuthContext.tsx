@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { signInWithPopup, signOut } from "firebase/auth";
 import { auth, googleProvider } from "../../firebase";
-
+import { clearHrChatStore } from "./layout/HrChatWidget";
 export type Role = "hr" | "interviewer";
 
 interface AuthUser {
@@ -150,6 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setActiveRole(null);
     setSessionExpired(false);
     localStorage.removeItem(SESSION_KEY);
+    clearHrChatStore();
   }
 
   return (

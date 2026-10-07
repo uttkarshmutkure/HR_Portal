@@ -825,31 +825,13 @@ function OfferChatPanel({
     onSetTyping(true);
 
     try {
-      const emailHtml = `<div style="font-family: Arial, sans-serif; color: #374151; max-width: 600px; white-space: pre-wrap;">${emailBody}</div>`;
-
-      const emailRes = await fetch(import.meta.env.VITE_SEND_EMAIL_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: 'mutkureu@gmail.com',
-          subject: emailSubject,
-          body: emailHtml,
-          attachments: [
-            {
-              filename: `Offer_Letter_${firstName}.pdf`,
-              content: pendingPdfBase64,
-              encoding: 'base64'
-            }
-          ]
-        })
-      });
-
-      if (!emailRes.ok) throw new Error('Email backend failed to send.');
-
-      // Save the offer to BigQuery (now includes salaryRules)
       const saveRes = await fetch(OFFER_API, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'generate', jobId, candidateId: candId, draft, sendEmail: false, salaryRules }),
+        body: JSON.stringify({
+          action: 'generate', jobId, candidateId: candId, draft, sendEmail: true, salaryRules,
+          pdfBase64: pendingPdfBase64,
+          pdfFilename: `Offer_Letter_${firstName}.pdf`,
+        }),
       });
 
       if (!saveRes.ok) {
@@ -860,6 +842,9 @@ function OfferChatPanel({
       const saveData = await saveRes.json();
       if (!saveData.savedToDB) {
         throw new Error('Offer agent ran but did not confirm the save.');
+      }
+      if (!saveData.emailSent) {
+        throw new Error('Offer saved but email failed to send.');
       }
       onSaveOfferLocal(draft);
 

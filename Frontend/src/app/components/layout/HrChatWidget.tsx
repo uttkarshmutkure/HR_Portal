@@ -29,7 +29,7 @@ interface ChatMessage {
 // explicitly on logout (see the useEffect below).
 let hrChatStore: { open: boolean; messages: ChatMessage[] } = { open: false, messages: [] };
 
-function clearHrChatStore() {
+export function clearHrChatStore() {
   hrChatStore = { open: false, messages: [] };
 }
 

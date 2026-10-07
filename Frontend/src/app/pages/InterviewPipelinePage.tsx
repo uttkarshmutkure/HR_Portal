@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router';
-import { Check, X, Clock, Users, RefreshCw, UserCog, Loader2, Info } from 'lucide-react';
+import { Check, X, Clock, Users, RefreshCw, UserCog, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { ShortlistStore } from '../../services/shortlistStore';
 import { FeedbackStore } from '../../services/feedbackStore';
@@ -14,6 +14,7 @@ import { SalaryRules, DEFAULT_SALARY_RULES, GenerateChoiceModal, SalaryDetailsMo
 
 const GET_CANDIDATE_SLOTS_URL = import.meta.env.VITE_GET_CANDIDATE_SLOTS_URL;
 const SAVE_SLOTS_URL = import.meta.env.VITE_SAVE_SLOTS_URL;
+const OFFER_AGENT_URL = import.meta.env.VITE_OFFER_AGENT_URL;
 // ── Shared Interviewer Store ───────────────────────────────────────────────────
 const InterviewerHelper = {
   get: (jobId: string) => {
@@ -367,7 +368,7 @@ export default function InterviewPipelinePage() {
   // Per-candidate, per-round interviewer email — used to filter visibility for the Interviewer role
   const [candidateInterviewers, setCandidateInterviewers] = useState<Record<string, Record<string, string | null>>>({});
   const [manualCand, setManualCand] = useState<any | null>(null);
-
+  const [offerStatuses, setOfferStatuses] = useState<Record<string, string>>({});
 
   // Only reset detailTab when activeTab changes, not when detailTab itself changes.
   // Having detailTab in the dep array caused a loop: clicking Pipeline tab on onboarding
@@ -406,6 +407,21 @@ export default function InterviewPipelinePage() {
           pipelineCache[jobId] = inPipeline; // Save to cache
           setPipelineCandidates(inPipeline);
         }
+      })
+      .catch(console.error);
+  }, [jobId, refreshKey]);
+
+  useEffect(() => {
+    if (!jobId || !OFFER_AGENT_URL) return;
+    fetch(OFFER_AGENT_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_offers', jobId }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        const map: Record<string, string> = {};
+        (data.offers ?? []).forEach((o: any) => { map[o.candidateId] = o.status; });
+        setOfferStatuses(map);
       })
       .catch(console.error);
   }, [jobId, refreshKey]);
@@ -501,7 +517,7 @@ export default function InterviewPipelinePage() {
     };
 
     fetchRounds();
-  }, [jobId, refreshKey, pipelineCandidates]);
+    }, [jobId, refreshKey, pipelineCandidates, offerStatuses]);
 
   // HR sees everyone. An Interviewer only sees a candidate in a given tab if they
   // are the assigned interviewer for that round (or, for Hired/Archived, if they
@@ -691,6 +707,21 @@ export default function InterviewPipelinePage() {
     }
   };
 
+  const handleMoveToHired = async (cand: TopCandidate, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!jobId) return;
+    try {
+      await fetch(import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_id: cand.candidate_id, candidate_result: 'Hired' }),
+      });
+      refresh();
+    } catch (err) {
+      console.error('Failed to move candidate to Hired', err);
+    }
+  };
+
   const goToOfferCopilot = (rulesOverride?: SalaryRules) => {
     if (!pendingOfferTarget) return;
     navigate(`/jobs/${jobId}/candidates/${pendingOfferTarget.cand.candidate_id}/offer`, {
@@ -780,6 +811,25 @@ export default function InterviewPipelinePage() {
       color: #fff; 
     }
 
+    .stage-wrap { display: flex; gap: 16px; padding: 20px 32px 16px; align-items: stretch; }
+    .stage-bar { flex: 1; min-width: 0; display: flex; background: #fff; border: 0.5px solid #E5E7EB; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+    .stage-seg { position: relative; flex: 1; min-width: 0; height: 84px; border: none; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-family: 'Inter', sans-serif; color: #111827; padding: 0 16px; }
+    .stage-seg:not(:first-child) { margin-left: -12px; }
+    .stage-seg .seg-bg { position: absolute; inset: 0; z-index: 0; clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%); }
+    .stage-seg:not(:first-child) .seg-bg { clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%, 12px 50%); }
+    .stage-seg:last-child .seg-bg { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 12px 50%); }
+    .stage-seg:hover .seg-bg { background: #F9FAFB; }
+    .stage-seg.active .seg-bg { background: #EFEFFD; }
+    .stage-seg:not(:first-child)::before, .stage-seg:not(:first-child)::after { content: ''; position: absolute; left: 12px; width: 1px; height: 50%; background: #D1D5DB; z-index: 1; }
+    .stage-seg:not(:first-child)::before { top: 0; transform-origin: bottom left; transform: skewX(16deg); }
+    .stage-seg:not(:first-child)::after { bottom: 0; transform-origin: top left; transform: skewX(-16deg); }
+    .seg-label { position: relative; z-index: 2; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .seg-count { position: relative; z-index: 2; font-size: 20px; font-weight: 500; line-height: 1; }
+    .stage-end { display: flex; background: #fff; border: 0.5px solid #E5E7EB; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+    .end-seg { border: none; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 28px; min-width: 100px; font-family: 'Inter', sans-serif; color: #111827; }
+    .end-seg + .end-seg { border-left: 0.5px solid #E5E7EB; }
+    .end-seg:hover { background: #F9FAFB; }
+    .end-seg.active { background: #EFEFFD; }    
     .content-area { padding: 10px 32px 32px; display: flex; gap: 24px; align-items: flex-start; }
     .candidates-col { flex: 1; min-width: 0; }
     .detail-panel { width: 420px; flex-shrink: 0; position: sticky; top: 80px; }
@@ -1456,19 +1506,33 @@ export default function InterviewPipelinePage() {
           </button>
         </div>
 
-        <div className="round-tabs">
-          {(['round1','round2','hrround','onboarding','hired','archived'] as RoundTab[]).map(tab => {
-            const labels: Record<RoundTab,string> = {
-              round1: 'Round 1 — Technical', round2: 'Round 2 — Advanced',
-              hrround: 'HR Round', onboarding: 'Onboarding',
-              hired: 'Hired', archived: 'Archived'
-            };
-            return (
-              <button key={tab} className={`round-tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
-                {labels[tab]} <span className="tab-count">{candidatesByRound[tab].length}</span>
-              </button>
-            );
-          })}
+        <div className="stage-wrap">
+          <div className="stage-bar">
+            {(['round1','round2','hrround','onboarding'] as RoundTab[]).map(tab => {
+              const labels: Record<string, string> = {
+                round1: 'Round 1 — Technical', round2: 'Round 2 — Advanced',
+                hrround: 'HR Round', onboarding: 'Onboarding',
+              };
+              return (
+                <button key={tab} className={`stage-seg ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
+                  <span className="seg-bg" />
+                  <span className="seg-label">{labels[tab]}</span>
+                  <span className="seg-count">{candidatesByRound[tab].length}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="stage-end">
+            <button className={`end-seg ${activeTab === 'hired' ? 'active' : ''}`} onClick={() => setActiveTab('hired')}>
+              <span className="seg-label"><CheckCircle2 size={16} color="#10B981" /> Hired</span>
+              <span className="seg-count">{candidatesByRound.hired.length}</span>
+            </button>
+            <button className={`end-seg ${activeTab === 'archived' ? 'active' : ''}`} onClick={() => setActiveTab('archived')}>
+              <span className="seg-label"><XCircle size={16} color="#EF4444" /> Archived</span>
+              <span className="seg-count">{candidatesByRound.archived.length}</span>
+            </button>
+          </div>
         </div>
 
         <div className="content-area">
@@ -1553,18 +1617,11 @@ export default function InterviewPipelinePage() {
                                       <button
                                         className="btn-sm"
                                         onClick={e => { e.stopPropagation(); setManualCand(cand); }}
-                                        title="Manual Slot Selection"
+                                        title="Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response."
                                         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F5F3FF', borderColor: '#DDD6FE', color: '#7C3AED', whiteSpace: 'nowrap' }}
                                       >
                                         <UserCog size={12} /> Manual Slot
                                       </button>
-                                      <span
-                                        onClick={e => e.stopPropagation()}
-                                        title="Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response."
-                                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', color: '#9CA3AF', cursor: 'help', flexShrink: 0 }}
-                                      >
-                                        <Info size={13} />
-                                      </span>
                                     </>
                                   )}
 
@@ -1581,16 +1638,25 @@ export default function InterviewPipelinePage() {
 
                         {activeTab === 'onboarding' && (
                           <div className="row-acts" onClick={e => e.stopPropagation()}>
-                            <button
-                              className="btn-sm primary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setPendingOfferTarget({ cand, jdTitle });
-                                setShowGenerateChoiceModal(true);
-                              }}
-                            >
-                              Generate Offer →
-                            </button>
+                            {offerStatuses[cand.candidate_id] === 'accepted' ? (
+                              <button
+                                className="btn-sm primary"
+                                onClick={(e) => handleMoveToHired(cand, e)}
+                              >
+                                Move to Hired ✓
+                              </button>
+                            ) : (
+                              <button
+                                className="btn-sm primary"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPendingOfferTarget({ cand, jdTitle });
+                                  setShowGenerateChoiceModal(true);
+                                }}
+                              >
+                                Generate Offer →
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1670,17 +1736,26 @@ export default function InterviewPipelinePage() {
                   <div className="det-body">
                     <div style={{ marginTop: 28, padding: 20, background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 12, textAlign: 'center' }}>
                       <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px', fontSize: 20 }}>✦</div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 4 }}>Ready to generate an offer?</div>
-                      <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>Open the full-screen AI Copilot to draft and finalise the offer letter.</div>
-                      <button
-                        onClick={() => {
-                          setPendingOfferTarget({ cand: selectedCandidate, jdTitle });
-                          setShowGenerateChoiceModal(true);
-                        }}
-                        style={{ background: '#111827', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
-                      >
-                        Open Offer Copilot →
-                      </button>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 4 }}>{offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? 'Offer accepted 🎉' : 'Ready to generate an offer?'}</div>
+                      <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>{offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? 'Move this candidate to Hired to complete the process.' : 'Open the full-screen AI Copilot to draft and finalise the offer letter.'}</div>
+                      {offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? (
+                        <button
+                          onClick={() => handleMoveToHired(selectedCandidate)}
+                          style={{ background: '#16A34A', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
+                        >
+                          Move to Hired ✓
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setPendingOfferTarget({ cand: selectedCandidate, jdTitle });
+                            setShowGenerateChoiceModal(true);
+                          }}
+                          style={{ background: '#111827', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
+                        >
+                          Open Offer Copilot →
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

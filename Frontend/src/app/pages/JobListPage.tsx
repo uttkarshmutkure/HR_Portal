@@ -8,6 +8,7 @@ import {
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
+import { useAuth } from '../components/AuthContext';
 
 const FONT = 'Inter, sans-serif';
 
@@ -137,11 +138,12 @@ function WorkModeBadge({ mode }: { mode: 'WFO' | 'WFH' | string }) {
 }
 
 // ── InterviewerCard ───────────────────────────────────────────────────
-function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
+function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot, canDelete }: {
   inv: any;
   onEdit: (inv: any) => void;
   onDelete: (id: string) => void;
   onRemoveSlot: (invId: string, slot: { day: string; start_time: string; end_time: string }) => void;
+  canDelete: boolean;
 }) {
   const [showSlots, setShowSlots] = useState(false);
 
@@ -195,13 +197,15 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
             <Edit2 size={12} />
           </button>
 
-          <button
-            onClick={() => { if (window.confirm('Remove this interviewer completely?')) onDelete(inv.id); }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '6px', background: T.redBg, border: '0.5px solid #FCA5A5', color: T.red, cursor: 'pointer', transition: 'all .15s' }}
-            title="Remove Interviewer"
-          >
-            <Trash2 size={12} />
-          </button>
+          {canDelete && (
+            <button
+              onClick={() => { if (window.confirm('Remove this interviewer completely?')) onDelete(inv.id); }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '6px', background: T.redBg, border: '0.5px solid #FCA5A5', color: T.red, cursor: 'pointer', transition: 'all .15s' }}
+              title="Remove Interviewer"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
 
           <button
             onClick={() => setShowSlots(v => !v)}
@@ -233,13 +237,15 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot }: {
                     <Clock size={11} style={{ color: T.orange, flexShrink: 0 }} />
                     <span style={{ fontSize: '11px', color: T.textSub, fontFamily: FONT }}>{formatTime12(tr.start)} – {formatTime12(tr.end)}</span>
                   </div>
-                  <button
-                    onClick={() => onRemoveSlot(inv.id, { day: ds.day, start_time: tr.start, end_time: tr.end })}
-                    title="Delete this slot"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.red, display: 'flex', padding: '2px' }}
-                  >
-                    <Trash size={12} />
-                  </button>
+                  {canDelete && (
+                    <button
+                      onClick={() => onRemoveSlot(inv.id, { day: ds.day, start_time: tr.start, end_time: tr.end })}
+                      title="Delete this slot"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.red, display: 'flex', padding: '2px' }}
+                    >
+                      <Trash size={12} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -419,6 +425,7 @@ function DayScheduler({ value, onChange }: { value: DaySlot[]; onChange: (slots:
 function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) {
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { activeRole, user } = useAuth();
   const [expanded, setExpanded] = useState(autoExpand ?? false);
   const [subTab, setSubTab] = useState<'jd' | 'setup'>('jd');
 
@@ -664,6 +671,11 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
   const openEditModal = (inv: any) => { setEditingInv(inv); setShowModal(true); };
 
   const [showReferModal, setShowReferModal] = useState(false);
+  const visibleInterviewers = activeRole === 'hr'
+    ? interviewers
+    : interviewers.filter(
+        (inv: any) => inv.email?.toLowerCase() === (user?.email || '').toLowerCase()
+      );
 
  
 
@@ -1071,6 +1083,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
+          {activeRole === 'hr' && (
           <div style={{ display: 'flex', gap: '6px', position: 'relative' }}>
             <input
               type="file" 
@@ -1139,6 +1152,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
             </button>
             <button onClick={handleResultsClick} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '6px', color: T.textSub, cursor: 'pointer', transition: 'background .12s' }}>Results</button>
           </div>
+          )}
         </div>
       </div>
 
@@ -1156,22 +1170,27 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
                 <div style={{ animation: 'fadeIn 0.2s ease-in-out' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <div style={{ fontSize: '11px', fontWeight: 600, color: T.gray400, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT }}>Assigned Interviewers & Slots</div>
-                    <button onClick={openAddModal} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.orangeLight, border: `0.5px solid ${T.orangeBorder}`, color: '#C2540A', cursor: 'pointer' }}>
-                      <Plus size={12} /> Add Interviewer
-                    </button>
+                    {activeRole === 'hr' && (
+                      <button onClick={openAddModal} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.orangeLight, border: `0.5px solid ${T.orangeBorder}`, color: '#C2540A', cursor: 'pointer' }}>
+                        <Plus size={12} /> Add Interviewer
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {interviewers.map((inv: any, i: number) => (
+                    {visibleInterviewers.map((inv: any, i: number) => (
                       <InterviewerCard
                         key={inv.id || i}
                         inv={inv}
                         onEdit={openEditModal}
                         onDelete={handleDeleteInterviewer}
                         onRemoveSlot={handleRemoveSlotFromCard}
+                        canDelete={activeRole === 'hr'}
                       />
                     ))}
-                    {interviewers.length === 0 && (
-                      <div style={{ fontSize: '12px', color: T.gray400, padding: '20px 0', textAlign: 'center', fontFamily: FONT }}>No interviewers assigned yet.</div>
+                    {visibleInterviewers.length === 0 && (
+                      <div style={{ fontSize: '12px', color: T.gray400, padding: '20px 0', textAlign: 'center', fontFamily: FONT }}>
+                        {activeRole === 'hr' ? 'No interviewers assigned yet.' : 'You have no slots assigned for this job yet.'}
+                      </div>
                     )}
                   </div>
                 </div>
