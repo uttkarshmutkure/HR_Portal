@@ -1457,6 +1457,78 @@ paths:
           description: No Content
   
   # =========================
+  # HR SCREENING - Manage Users (Admin Panel)
+  # =========================
+  /hr-screening/manage-users:
+    post:
+      summary: List users, grant access, update roles, or enable/disable accounts (superuser only)
+      operationId: hr-screening-manage-users-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-manage-users
+        deadline: 60.0
+      responses:
+        '200':
+          description: Action completed successfully
+        '400':
+          description: Missing or invalid payload
+        '403':
+          description: Forbidden — requester is not an active superuser
+        '404':
+          description: User not found
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-manage-users-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-manage-users
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+
+  # =========================
+  # HR SCREENING - Manage Jobs (Admin Panel)
+  # =========================
+  /hr-screening/manage-jobs:
+    post:
+      summary: List, create, update, archive or restore jobs (superuser only)
+      operationId: hr-screening-manage-jobs-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-manage-jobs
+        deadline: 60.0
+      responses:
+        '200':
+          description: Action completed successfully
+        '400':
+          description: Missing or invalid payload
+        '403':
+          description: Forbidden — requester is not an active superuser
+        '404':
+          description: Job not found
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-manage-jobs-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-manage-jobs
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+
+  # =========================
   # GCS RESUME TRIGGER
   # =========================
   /gcs-resume-trigger:
