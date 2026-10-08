@@ -31,7 +31,7 @@ export const router = createBrowserRouter([
     path: "/login",
     Component: LoginPage,
   },
-  {
+    {
     path: "/dashboard", 
     element: (
       <ProtectedRoute allowedRoles={["hr"]}>
