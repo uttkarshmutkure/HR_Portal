@@ -300,7 +300,7 @@ export default function LoginPage() {
       position: "relative",
       minHeight: "100vh", background: T.navyDeep, fontFamily: T.font,
       display: "flex", alignItems: "center", justifyContent: "center",
-      padding: "24px", overflow: "hidden",
+      padding: "16px 24px", overflowX: "hidden",
     }}>
       {/* Background layers */}
       <div style={{
@@ -333,10 +333,10 @@ export default function LoginPage() {
         onSubmit={handleSubmit}
         style={{
           position: "relative", zIndex: 2,
-          width: "100%", maxWidth: "400px",
+          width: "100%", maxWidth: "440px",
           background: "rgba(255,255,255,0.035)",
           border: "0.5px solid rgba(255,255,255,0.1)",
-          borderRadius: "20px", padding: "40px 36px",
+          borderRadius: "20px", padding: "28px 32px",
           backdropFilter: "blur(14px)",
           WebkitBackdropFilter: "blur(14px)",
           boxShadow: "0 30px 80px rgba(0,0,0,0.45)",
@@ -344,7 +344,7 @@ export default function LoginPage() {
         }}
       >
         {/* Logo mark */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "28px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px" }}>
           <img
             src="/company-logo1.png"
             alt="Atgeir Solutions"
@@ -359,10 +359,10 @@ export default function LoginPage() {
           </span>
         </div>
 
-        <h1 style={{ color: "#fff", fontSize: "24px", fontWeight: 800, letterSpacing: "-0.02em", marginBottom: "6px" }}>
+        <h1 style={{ color: "#fff", fontSize: "22px", fontWeight: 800, letterSpacing: "-0.02em", marginBottom: "6px" }}>
           Welcome back
         </h1>
-        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "13px", marginBottom: "30px" }}>
+        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "13px", marginBottom: "20px" }}>
           Sign in to continue to your workspace
         </p>
 
@@ -370,7 +370,7 @@ export default function LoginPage() {
         <p style={{ fontSize: "11px", fontWeight: 600, color: "rgba(255,255,255,0.35)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "10px" }}>
           I am logging in as
         </p>
-                <div style={{ display: "flex", gap: "10px", marginBottom: "24px" }}>
+                <div style={{ display: "flex", gap: "10px", marginBottom: "16px" }}>
           <RoleOption
             active={role === "hr"}
             icon={Building2}
@@ -385,6 +385,13 @@ export default function LoginPage() {
             sub="Your interviews"
             onClick={() => setRole("interviewer")}
           />
+          <RoleOption
+            active={role === "user"}
+            icon={UserSquare2}
+            label="User"
+            sub="Jobs & refer"
+            onClick={() => setRole("user")}
+          />         
         </div>
 
         <label style={labelStyle}>Email address</label>
@@ -416,9 +423,9 @@ export default function LoginPage() {
           type="submit"
           disabled={loading}
           style={{
-            marginTop: "24px", width: "100%",
+            marginTop: "18px", width: "100%",
             display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
-            padding: "13px", borderRadius: "10px",
+            padding: "12px", borderRadius: "10px",
             background: T.orange, color: "#fff",
             fontSize: "14px", fontWeight: 600, border: "none",
             cursor: loading ? "default" : "pointer",
@@ -467,7 +474,7 @@ function RoleOption({ active, icon: Icon, label, sub, onClick }: {
       onClick={onClick}
       style={{
         flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "7px",
-        padding: "16px 8px", borderRadius: "12px",
+        padding: "12px 6px", borderRadius: "12px",
         border: active ? `1px solid ${T.orange}` : "1px solid rgba(255,255,255,0.1)",
         background: active ? T.orangeDim : "rgba(255,255,255,0.02)",
         cursor: "pointer", transition: "all 0.15s",

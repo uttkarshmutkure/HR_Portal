@@ -1,9 +1,16 @@
 import { Link, useLocation } from 'react-router';
+import { useAuth } from '../AuthContext';
 
 const FONT = 'Inter, sans-serif';
 
 export default function TopBar({ breadcrumb }: { breadcrumb?: string }) {
   const location = useLocation();
+  const { activeRole } = useAuth();
+  const canOpen = (path: string) =>
+    activeRole === 'hr' ||
+    path === '/jobs' || path === '/interviews' || path === '/feedback' ||
+    path.includes('/candidates/') ||
+    path.endsWith('/pipeline');
   const pathParts = location.pathname.split('/').filter(Boolean);
 
   // ── Smarter Breadcrumb Parser ──
@@ -49,7 +56,7 @@ export default function TopBar({ breadcrumb }: { breadcrumb?: string }) {
     });
   };
 
-  const links = getBreadcrumbLinks();
+  const links = getBreadcrumbLinks().filter(l => l.isLast || canOpen(l.path));
 
   return (
     <div style={{ background: '#fff', borderBottom: '0.5px solid #E5E7EB', height: '56px', display: 'flex', alignItems: 'center', padding: '0 24px', gap: '12px', position: 'sticky', top: 0, zIndex: 40 }}>
@@ -58,8 +65,8 @@ export default function TopBar({ breadcrumb }: { breadcrumb?: string }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontFamily: FONT }}>
         {links.map((link, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {link.isLast ? (
-              <span style={{ color: '#111827', fontWeight: 500 }}>{link.label}</span>
+            {link.isLast || !canOpen(link.path) ? (
+              <span style={{ color: link.isLast ? '#111827' : '#9CA3AF', fontWeight: link.isLast ? 500 : 400, cursor: 'default' }}>{link.label}</span>
             ) : (
               <Link
                 to={link.path}

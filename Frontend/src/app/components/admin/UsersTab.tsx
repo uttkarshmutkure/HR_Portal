@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, X, ShieldCheck, UserSquare2, Building2, Power } from 'lucide-react';
+import { Loader2, Plus, X, UserSquare2, Building2, Power, User, Search } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
 import { listUsers, grantAccess, setUserStatus, AdminUser, UserRole } from '../../../services/adminUsers';
@@ -17,14 +17,14 @@ const T = {
 const ROLE_OPTIONS: { value: UserRole; label: string; icon: any }[] = [
   { value: 'hr', label: 'HR', icon: Building2 },
   { value: 'interviewer', label: 'Interviewer', icon: UserSquare2 },
-  { value: 'superuser', label: 'Superuser', icon: ShieldCheck },
+  { value: 'user', label: 'User', icon: User },
 ];
 
 function RoleBadge({ role }: { role: UserRole }) {
   const styles: Record<UserRole, { bg: string; color: string }> = {
     hr: { bg: '#EFF6FF', color: '#1D4ED8' },
     interviewer: { bg: '#F5F3FF', color: '#6D28D9' },
-    superuser: { bg: T.orangeLight, color: '#9A3412' },
+    user: { bg: '#ECFDF5', color: '#065F46' },
   };
   return (
     <span style={{
@@ -196,6 +196,7 @@ export default function UsersTab() {
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<AdminUser | null>(null);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadUsers = async () => {
     if (!user?.email) return;
@@ -230,7 +231,11 @@ export default function UsersTab() {
       setIsTogglingStatus(false);
     }
   };
-
+  const q = searchQuery.trim().toLowerCase();
+  const visibleUsers = users.filter(u => !q ||
+    u.name.toLowerCase().includes(q) ||
+    u.email.toLowerCase().includes(q) ||
+    u.roles.some(r => r.toLowerCase().includes(q)));
   return (
     <div style={{ fontFamily: FONT }}>
       {showForm && (
@@ -260,12 +265,23 @@ export default function UsersTab() {
           <div style={{ fontSize: '14px', fontWeight: 600, color: T.text }}>User Access</div>
           <div style={{ fontSize: '11px', color: T.textSub, marginTop: '2px' }}>{users.length} user{users.length !== 1 ? 's' : ''} total</div>
         </div>
-        <button
-          onClick={openAddModal}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500, background: T.orange, color: T.white, border: 'none', cursor: 'pointer' }}
-        >
-          <Plus size={13} /> Grant Access
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ position: 'relative', width: '220px' }}>
+            <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: T.gray400, pointerEvents: 'none' }} />
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search users…"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px 7px 30px', fontSize: '12px', fontFamily: FONT, borderRadius: '7px', border: `0.5px solid ${T.gray200}`, outline: 'none', color: T.text, background: T.white }}
+            />
+          </div>
+          <button
+            onClick={openAddModal}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500, background: T.orange, color: T.white, border: 'none', cursor: 'pointer' }}
+          >
+            <Plus size={13} /> Grant Access
+          </button>
+        </div>
       </div>
 
       <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '10px', overflow: 'hidden' }}>
@@ -275,15 +291,15 @@ export default function UsersTab() {
           </div>
         ) : error ? (
           <div style={{ padding: '40px', textAlign: 'center', color: T.red, fontSize: '12px' }}>{error}</div>
-        ) : users.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: T.gray400, fontSize: '12px' }}>No users yet.</div>
+        ) : visibleUsers.length === 0 ? (
+          <div style={{ padding: '40px', textAlign: 'center', color: T.gray400, fontSize: '12px' }}>{users.length === 0 ? 'No users yet.' : 'No users match your search.'}</div>
         ) : (
-          users.map((u, i) => (
+          visibleUsers.map((u, i) => (
             <div
               key={u.user_id}
               style={{
                 display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
-                borderBottom: i < users.length - 1 ? `0.5px solid ${T.gray100}` : 'none',
+                borderBottom: i < visibleUsers.length - 1 ? `0.5px solid ${T.gray100}` : 'none',
                 opacity: u.status === 'disabled' ? 0.55 : 1,
               }}
             >

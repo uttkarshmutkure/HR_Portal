@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { signInWithPopup, signOut } from "firebase/auth";
 import { auth, googleProvider } from "../../firebase";
-
-export type Role = "hr" | "interviewer" | "superuser";
+import { clearHrChatStore } from "./layout/HrChatWidget";
+export type Role = "hr" | "interviewer" | "user";
 
 interface AuthUser {
   id: string;

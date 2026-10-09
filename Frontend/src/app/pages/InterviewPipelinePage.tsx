@@ -170,6 +170,28 @@ const statusesCache: Record<string, Record<string, [string, string | null]>> = {
 const profileCache: Record<string, any> = {};
 const interviewersCache: Record<string, Record<string, Record<string, string | null>>> = {};
 
+// ── Confirmation Dialog (same as Results page) ──────────────────────────────
+function ConfirmDialog({ message, onConfirm, onCancel, confirmLabel, confirmColor, isLoading = false }: {
+  message: string; onConfirm: () => void; onCancel: () => void;
+  confirmLabel: string; confirmColor: string; isLoading?: boolean;
+}) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
+      <div style={{ background: '#fff', borderRadius: '12px', padding: '24px 28px', width: '340px', boxShadow: '0 8px 30px rgba(0,0,0,0.12)', fontFamily: 'Inter, sans-serif' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827', marginBottom: '8px' }}>Are you sure?</div>
+        <div style={{ fontSize: '12px', color: '#6B7280', lineHeight: 1.6, marginBottom: '20px' }}>{message}</div>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button disabled={isLoading} onClick={onCancel} style={{ padding: '7px 16px', fontSize: '12px', fontWeight: 500, background: '#F9FAFB', color: '#374151', border: '0.5px solid #E5E7EB', borderRadius: '7px', cursor: isLoading ? 'not-allowed' : 'pointer' }}>Cancel</button>
+          <button disabled={isLoading} onClick={onConfirm} style={{ padding: '7px 16px', fontSize: '12px', fontWeight: 500, background: confirmColor, color: '#fff', border: 'none', borderRadius: '7px', cursor: isLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: isLoading ? 0.7 : 1 }}>
+            {isLoading && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Manual Schedule Modal (Round 2 / HR) ────────────────────────────────────────
 const ManualScheduleModal = ({ cand, jobId, round, roundLabel, onClose, onSuccess }: {
   cand: any; jobId: string; round: string; roundLabel: string; onClose: () => void; onSuccess: () => void;
@@ -353,7 +375,8 @@ export default function InterviewPipelinePage() {
   const [showGenerateChoiceModal, setShowGenerateChoiceModal] = useState(false);
   const [showSalaryModal, setShowSalaryModal] = useState(false);
   const [pendingOfferTarget, setPendingOfferTarget] = useState<{ cand: TopCandidate; jdTitle: string } | null>(null);
-
+  const [hireTarget, setHireTarget] = useState<TopCandidate | null>(null);
+  const [isHiring, setIsHiring] = useState(false);
   // ── Live BigQuery profile data ─────────────────────────────────────────────
   const [feedbackData, setFeedbackData] = useState<{ timeline: any[]; feedback: any[] } | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -375,7 +398,7 @@ export default function InterviewPipelinePage() {
   // would immediately get overridden back to 'offer'.
   useEffect(() => {
     if (activeTab === 'onboarding') {
-      setDetailTab('offer');
+      setDetailTab(activeRole === 'hr' ? 'offer' : 'pipeline');
     } else {
       setDetailTab('pipeline');
     }
@@ -707,21 +730,30 @@ export default function InterviewPipelinePage() {
     }
   };
 
-  const handleMoveToHired = async (cand: TopCandidate, e?: React.MouseEvent) => {
+  const handleMoveToHired = (cand: TopCandidate, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!jobId) return;
+    setHireTarget(cand);
+  };
+
+  const doMoveToHired = async () => {
+    if (!hireTarget || !jobId) return;
+    setIsHiring(true);
     try {
       await fetch(import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidate_id: cand.candidate_id, candidate_result: 'Hired' }),
+        body: JSON.stringify({ candidate_id: hireTarget.candidate_id, candidate_result: 'Hired' }),
       });
+      showToast(`${hireTarget.name} moved to Hired`, 'success');
+      setHireTarget(null);
       refresh();
     } catch (err) {
       console.error('Failed to move candidate to Hired', err);
+      showToast('Failed to move candidate to Hired.', 'error');
+    } finally {
+      setIsHiring(false);
     }
   };
-
   const goToOfferCopilot = (rulesOverride?: SalaryRules) => {
     if (!pendingOfferTarget) return;
     navigate(`/jobs/${jobId}/candidates/${pendingOfferTarget.cand.candidate_id}/offer`, {
@@ -829,7 +861,13 @@ export default function InterviewPipelinePage() {
     .end-seg { border: none; background: transparent; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 28px; min-width: 100px; font-family: 'Inter', sans-serif; color: #111827; }
     .end-seg + .end-seg { border-left: 0.5px solid #E5E7EB; }
     .end-seg:hover { background: #F9FAFB; }
-    .end-seg.active { background: #EFEFFD; }    
+    .end-seg.active { background: #EFEFFD; } 
+    .stage-seg { padding: 0 22px 0 24px; }
+    .stage-seg:first-child { padding-left: 14px; }
+    .stage-seg .seg-label { font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .stage-seg .seg-count { font-size: 18px; }
+    .end-seg { padding: 0 18px; min-width: 84px; }
+    .end-seg .seg-label { font-size: 12px; }   
     .content-area { padding: 10px 32px 32px; display: flex; gap: 24px; align-items: flex-start; }
     .candidates-col { flex: 1; min-width: 0; }
     .detail-panel { width: 420px; flex-shrink: 0; position: sticky; top: 80px; }
@@ -1132,9 +1170,14 @@ export default function InterviewPipelinePage() {
         active: round === 'hrround' && (!hrStatus || hrStatus === 'scheduled' || hrStatus === 'confirmed'),
         failed: hrStatus === 'rejected' }, // <-- Added failed logic
       { label: 'Onboarding',
-        sub:    round === 'onboarding' ? 'Currently in this stage' : 'Pending',
-        done:   false,
+        sub:    round === 'hired' ? 'Completed — Candidate hired' : (round === 'onboarding' ? 'Currently in this stage' : 'Pending'),
+        done:   round === 'hired',
         active: round === 'onboarding',
+        failed: false },
+      { label: 'Hired',
+        sub:    round === 'hired' ? 'Offer accepted and process complete' : 'Pending',
+        done:   round === 'hired',
+        active: false,
         failed: false },
     ];
 
@@ -1474,6 +1517,15 @@ export default function InterviewPipelinePage() {
   return (
     <DashboardLayout breadcrumb={`Dashboard / Jobs / ${jdTitle} / Shortlisted / Interview Pipeline`}>
       <style>{css}</style>
+      {hireTarget && (
+        <ConfirmDialog
+          message={`Move ${hireTarget.name} to Hired? This marks the hiring process as complete.`}
+          confirmLabel="Yes, Move to Hired" confirmColor="#16A34A"
+          isLoading={isHiring}
+          onConfirm={doMoveToHired}
+          onCancel={() => !isHiring && setHireTarget(null)}
+        />
+      )}
 
       {feedbackModalCand && <InlineFeedbackModal cand={feedbackModalCand} onClose={() => setFeedbackModalCand(null)} />}
 
@@ -1542,7 +1594,9 @@ export default function InterviewPipelinePage() {
                 <h2>
                   {activeTab === 'round1' ? 'Round 1 — Technical Interview' :
                    activeTab === 'round2' ? 'Round 2 — Advanced Technical' :
-                   activeTab === 'hrround' ? 'HR & Culture Fit' : 'Offer & Onboarding'}
+                   activeTab === 'hrround' ? 'HR & Culture Fit' :
+                   activeTab === 'hired' ? 'Hired Candidates' :
+                   activeTab === 'archived' ? 'Archived Candidates' : 'Offer & Onboarding'}
                 </h2>
                 <div className="meta">Manage candidates currently in this stage</div>
               </div>
@@ -1612,7 +1666,7 @@ export default function InterviewPipelinePage() {
                             </button>
                             {/* --------------------------- */}
 
-                            {(activeTab === 'round2' || activeTab === 'hrround') && (
+                            {(activeTab === 'round2' || activeTab === 'hrround') && activeRole === 'hr' && (
                                     <>
                                       <button
                                         className="btn-sm"
@@ -1636,7 +1690,7 @@ export default function InterviewPipelinePage() {
                           </div>
                         )}
 
-                        {activeTab === 'onboarding' && (
+                        {activeTab === 'onboarding' && activeRole === 'hr' && (
                           <div className="row-acts" onClick={e => e.stopPropagation()}>
                             {offerStatuses[cand.candidate_id] === 'accepted' ? (
                               <button
@@ -1708,9 +1762,9 @@ export default function InterviewPipelinePage() {
                 {/* ── Detail tabs (always above content) ──────────────── */}
                 <div className="det-tabs">
                   {(activeTab === 'onboarding' 
-                    ? ['pipeline', 'offer'] 
+                    ? (activeRole === 'hr' ? ['pipeline', 'offer'] : ['pipeline'])
                     : (activeTab === 'hired' || activeTab === 'archived')
-                      ? ['pipeline', 'feedback', 'profile']
+                      ? ['pipeline', 'profile']
                       : ['pipeline', 'feedback', 'profile', 'questions']
                   ).map(t => (
                     <button 

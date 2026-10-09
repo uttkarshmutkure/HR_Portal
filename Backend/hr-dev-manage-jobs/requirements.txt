@@ -1,2 +1,15 @@
+# hr-dev-manage-jobs — Cloud Function dependencies
+# Used by: main.py, jd_processing.py
+
 functions-framework==3.*
+
+# Google Cloud
 google-cloud-bigquery==3.*
+google-cloud-storage==2.*
+google-cloud-aiplatform==1.*
+
+# Gemini / Vertex AI (JD field extraction)
+google-genai==1.*
+
+# PDF text extraction
+PyMuPDF==1.*

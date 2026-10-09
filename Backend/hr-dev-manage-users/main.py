@@ -9,7 +9,7 @@ PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "atgeir-moae-dev")
 DATASET_ID = os.environ.get("BQ_DATASET_ID", "hr_dataset")
 TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.users"
 
-VALID_ROLES = {"hr", "interviewer", "superuser"}
+VALID_ROLES = {"hr", "interviewer", "user"}
 CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
 
 
@@ -23,7 +23,7 @@ def _cors_preflight():
     return ("", 204, headers)
 
 
-def _is_active_superuser(email: str) -> bool:
+def _is_active_hr(email: str) -> bool:
     """Server-side authorization check — never trust the caller's claimed role."""
     if not email:
         return False
@@ -43,7 +43,7 @@ def _is_active_superuser(email: str) -> bool:
     if row.status != "active":
         return False
     roles = [r.strip() for r in (row.roles or "").split(",")]
-    return "superuser" in roles
+    return "hr" in roles
 
 
 def _get_user_by_id(user_id: str):
@@ -189,7 +189,7 @@ def manage_users(request):
         action = body.get("type")
         requester_email = body.get("requester_email")
 
-        if not _is_active_superuser(requester_email):
+        if not _is_active_hr(requester_email):
             return ({"success": False, "error": "Forbidden — superuser access required"}, 403, CORS_HEADERS)
 
         if action == "LIST_USERS":

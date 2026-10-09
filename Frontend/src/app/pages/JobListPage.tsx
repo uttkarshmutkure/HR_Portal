@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router';
 import {
   Briefcase, Loader2, AlertCircle, RefreshCw, Plus,
   ChevronDown, ChevronUp, X, Calendar,
-  Edit2, Trash2, Play, Trash, CheckCircle, Clock, Upload, Search
+  Edit2, Trash2, Play, Trash, CheckCircle, Clock, Upload, Search, FileText
 } from 'lucide-react';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
@@ -30,6 +30,12 @@ const DATA_MANAGER_URL = import.meta.env.VITE_DATA_MANAGER_URL;
 const SAVE_INTERVIEWER_URL = import.meta.env.VITE_SAVE_INTERVIEWER_URL;
 const RUN_PIPELINE_URL = import.meta.env.VITE_RUN_PIPELINE_URL;
 const REFER_CANDIDATE_URL = import.meta.env.VITE_REFER_CANDIDATE_URL;
+
+const MAX_RESUME_BYTES = 10 * 1024 * 1024;   // per file
+const MAX_RESUME_TOTAL = 30 * 1024 * 1024;   // per upload (server limit is 32 MB)
+const MAX_RESUME_FILES = 20;
+const fmtSize = (n: number) =>
+  n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
 // ── Types ──────────────────────────────────────────────────────────────
 export interface DaySlot {
@@ -452,6 +458,9 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
   const ic = iconColors[Math.abs(job.job_id.charCodeAt(0)) % 4];
 
   const [uploadingResume, setUploadingResume] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [resumeStatus, setResumeStatus] = useState<{ file_name: string; step: string; error?: string } | null>(null);
   const resumePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -463,7 +472,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
   const pollResumeStatus = (fileName: string) => {
     stopResumePolling();
     // Mirror the backend's sanitization exactly (upload_resumes_http keeps only alnum, ._- and spaces)
-    const cleanName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, '');
+    const cleanName = fileName;   // server already returns the stored (cleaned) name
     const fullPath = `resumes/${job.job_id}/${cleanName}`;
 
     resumePollRef.current = setInterval(async () => {
@@ -485,34 +494,70 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
   };
 
   const handleUploadClick = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevents accordion from toggling open/closed!
-    fileInputRef.current?.click();
+    e.stopPropagation(); // keeps the row from expanding/collapsing
+    setPendingFiles([]);
+    setUploadError(null);
+    setShowUploadModal(true);
   };
 
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const addFiles = (list: FileList | File[]) => {
+    const problems: string[] = [];
+    const next = [...pendingFiles];
+    let total = next.reduce((s, f) => s + f.size, 0);
 
+    for (const f of Array.from(list)) {
+      if (!f.name.toLowerCase().endsWith('.pdf')) { problems.push(`${f.name}: only PDF files are allowed`); continue; }
+      if (f.size > MAX_RESUME_BYTES)               { problems.push(`${f.name}: larger than 10 MB`); continue; }
+      if (next.some(x => x.name === f.name))       { problems.push(`${f.name}: already in the list`); continue; }
+      if (next.length >= MAX_RESUME_FILES)         { problems.push(`Maximum ${MAX_RESUME_FILES} resumes at a time`); break; }
+      if (total + f.size > MAX_RESUME_TOTAL)       { problems.push(`${f.name}: total size would exceed 30 MB — upload in smaller batches`); continue; }
+      next.push(f);
+      total += f.size;
+    }
+    setPendingFiles(next);
+    setUploadError(problems.length ? problems.join(' · ') : null);
+  };
+
+  const removeFile = (index: number) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+    setUploadError(null);
+  };
+
+  // Hidden <input> (kept in the HR actions area) just feeds files into the review list
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    if (e.target.files) addFiles(e.target.files);
+    e.target.value = '';   // lets the same file be picked again after removing it
+  };
+
+  const handleConfirmUpload = async () => {
+    if (pendingFiles.length === 0) return;
     setUploadingResume(true);
+    setUploadError(null);
+
     const formData = new FormData();
     formData.append('job_id', job.job_id);
-    Array.from(files).forEach((f) => formData.append('resumes', f));
-
-    const firstFileName = files[0].name;
-    pollResumeStatus(firstFileName);
+    pendingFiles.forEach(f => formData.append('resumes', f));
 
     try {
       const UPLOAD_URL = import.meta.env.VITE_UPLOAD_RESUME_URL;
       const res = await fetch(UPLOAD_URL, { method: 'POST', body: formData });
-      if (!res.ok) throw new Error('Upload failed');
-      showToast(`${files.length} resume(s) sent to bucket! Pipeline incoming...`, 'success');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || 'Upload failed');
+
+      const skipped = data.skipped?.length ?? 0;
+      showToast(
+        `${data.count} resume(s) uploaded${skipped ? `, ${skipped} skipped (already uploaded)` : ''}. Pipeline incoming...`,
+        'success'
+      );
+      if (data.files?.length) pollResumeStatus(data.files[0]);   // exact name the server stored
       startPolling();
-    } catch (err) {
-      showToast('Failed to upload resumes to storage.', 'error');
+      setShowUploadModal(false);
+      setPendingFiles([]);
+    } catch (err: any) {
+      setUploadError(err.message || 'Failed to upload resumes.');
     } finally {
       setUploadingResume(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -1055,7 +1100,86 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     <div style={{ borderBottom: `0.5px solid ${T.gray100}` }}>
       {showModal && <InterviewerModal />}
       {showReferModal && <ReferFriendModal />}
+      {showUploadModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          onClick={e => e.target === e.currentTarget && !uploadingResume && setShowUploadModal(false)}
+        >
+          <div style={{ background: T.white, borderRadius: '14px', width: '100%', maxWidth: '500px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 48px rgba(0,0,0,0.14)', fontFamily: FONT }}>
+            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: T.text }}>Upload Resumes</h3>
+                <div style={{ fontSize: '11px', color: T.gray600, marginTop: '2px' }}>{job.title} · {job.job_id}</div>
+              </div>
+              <button onClick={() => setShowUploadModal(false)} disabled={uploadingResume} style={{ background: 'none', border: 'none', cursor: uploadingResume ? 'not-allowed' : 'pointer', color: T.gray400, display: 'flex', padding: '2px' }}>
+                <X size={16} />
+              </button>
+            </div>
 
+            <div style={{ padding: '18px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div
+                onClick={() => !uploadingResume && fileInputRef.current?.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); if (!uploadingResume) addFiles(e.dataTransfer.files); }}
+                style={{ border: `1.5px dashed ${T.orangeBorder}`, background: T.orangeLight, borderRadius: '10px', padding: '18px', textAlign: 'center', cursor: uploadingResume ? 'not-allowed' : 'pointer' }}
+              >
+                <Upload size={18} style={{ color: T.orange, marginBottom: '4px' }} />
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#9A3412' }}>
+                  {pendingFiles.length ? 'Add more PDFs' : 'Click or drag PDF resumes here'}
+                </div>
+                <div style={{ fontSize: '10px', color: T.gray600, marginTop: '2px' }}>
+                  Up to {MAX_RESUME_FILES} files · 10 MB each · PDF only
+                </div>
+              </div>
+
+              {pendingFiles.length > 0 && (
+                <>
+                  <div style={{ fontSize: '11px', color: T.gray600 }}>
+                    Review the {pendingFiles.length} file{pendingFiles.length !== 1 ? 's' : ''} below. Remove any added by mistake with ✕, then confirm.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {pendingFiles.map((f, i) => (
+                      <div key={f.name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', border: `0.5px solid ${T.gray200}`, borderRadius: '8px', background: T.gray50 }}>
+                        <FileText size={14} style={{ color: T.orange, flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, fontSize: '12px', color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                        <span style={{ fontSize: '10px', color: T.gray400, flexShrink: 0 }}>{fmtSize(f.size)}</span>
+                        <button
+                          onClick={() => removeFile(i)}
+                          disabled={uploadingResume}
+                          title="Remove this resume"
+                          style={{ background: 'none', border: 'none', cursor: uploadingResume ? 'not-allowed' : 'pointer', color: T.red, display: 'flex', padding: '2px', flexShrink: 0 }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {uploadError && (
+                <div style={{ fontSize: '12px', color: T.red, background: T.redBg, border: '0.5px solid #FCA5A5', borderRadius: '8px', padding: '10px 12px', lineHeight: 1.5 }}>
+                  {uploadError}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '12px 20px', borderTop: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'flex-end', gap: '8px', background: T.gray50 }}>
+              <button onClick={() => setShowUploadModal(false)} disabled={uploadingResume} style={{ padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500, background: T.white, border: `1px solid ${T.gray200}`, cursor: uploadingResume ? 'not-allowed' : 'pointer', color: T.textSub }}>
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmUpload}
+                disabled={pendingFiles.length === 0 || uploadingResume}
+                style={{ padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500, background: T.orange, color: T.white, border: 'none', display: 'flex', alignItems: 'center', gap: '6px', cursor: (pendingFiles.length === 0 || uploadingResume) ? 'not-allowed' : 'pointer', opacity: (pendingFiles.length === 0 || uploadingResume) ? 0.5 : 1 }}
+              >
+                {uploadingResume && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
+                {uploadingResume ? 'Uploading…' : `Confirm & Upload${pendingFiles.length ? ` (${pendingFiles.length})` : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div onClick={() => setExpanded(!expanded)} style={{ display: 'flex', alignItems: 'center', gap: '11px', padding: '13px 18px', cursor: 'pointer', transition: 'background 0.12s' }} onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = T.gray50} onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}>
         <div style={{ color: T.gray400, display: 'flex', alignItems: 'center' }}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
         <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: ic.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Briefcase size={14} style={{ color: ic.color }} /></div>
@@ -1161,7 +1285,9 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
           <div style={{ background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '8px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
             <div style={{ display: 'flex', gap: '0', padding: '0 16px', borderBottom: `0.5px solid ${T.gray200}`, background: T.gray50 }}>
               <button onClick={(e) => { e.stopPropagation(); setSubTab('jd'); }} style={{ background: 'none', border: 'none', padding: '10px 0', marginRight: '20px', fontSize: '12px', fontWeight: 600, fontFamily: FONT, cursor: 'pointer', transition: 'color 0.15s', color: subTab === 'jd' ? T.orange : T.gray600, borderBottom: subTab === 'jd' ? `2px solid ${T.orange}` : '2px solid transparent', marginBottom: '-1px' }}>Job Description</button>
-              <button onClick={(e) => { e.stopPropagation(); setSubTab('setup'); }} style={{ background: 'none', border: 'none', padding: '10px 0', fontSize: '12px', fontWeight: 600, fontFamily: FONT, cursor: 'pointer', transition: 'color 0.15s', color: subTab === 'setup' ? T.orange : T.gray600, borderBottom: subTab === 'setup' ? `2px solid ${T.orange}` : '2px solid transparent', marginBottom: '-1px' }}>Hiring Setup</button>
+              {activeRole !== 'user' && (
+                <button onClick={(e) => { e.stopPropagation(); setSubTab('setup'); }} style={{ background: 'none', border: 'none', padding: '10px 0', fontSize: '12px', fontWeight: 600, fontFamily: FONT, cursor: 'pointer', transition: 'color 0.15s', color: subTab === 'setup' ? T.orange : T.gray600, borderBottom: subTab === 'setup' ? `2px solid ${T.orange}` : '2px solid transparent', marginBottom: '-1px' }}>Hiring Setup</button>
+              )}
             </div>
             <div style={{ padding: '14px 16px', background: T.white }}>
               {subTab === 'jd' ? (

@@ -14,7 +14,8 @@ export default function ProtectedRoute({
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && activeRole && !allowedRoles.includes(activeRole)) {
+  const allowed = allowedRoles ?? ["hr", "interviewer"];
+  if (activeRole && !allowed.includes(activeRole)) {
     return <Navigate to="/" replace />;
   }
 

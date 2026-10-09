@@ -4,7 +4,7 @@
 
 const MANAGE_USERS_URL = import.meta.env.VITE_MANAGE_USERS_URL;
 
-export type UserRole = 'hr' | 'interviewer' | 'superuser';
+export type UserRole = 'hr' | 'interviewer' | 'user';
 
 export interface AdminUser {
   user_id: string;

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, X, Briefcase, Archive, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Loader2, Plus, X, Briefcase, Archive, RotateCcw, AlertTriangle, Upload, FileText, Trash2, Search } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
 import {
-  listAdminJobs, createJob, updateJob, archiveJob, restoreJob,
+  listAdminJobs, createJob, updateJob, deleteJob, restoreJob,
   AdminJob, JobFormInput,
 } from '../../../services/adminJobs';
 
@@ -36,7 +36,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-// ── Create / Edit modal ──────────────────────────────────────────────────
+// ── Edit modal (creating a job uses AddJobModal below) ──────────────────────────────────────────────────
 function JobFormModal({ editingJob, onClose, onSaved }: {
   editingJob: AdminJob | null;
   onClose: () => void;
@@ -58,7 +58,7 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
     expMin !== '' && expMax !== '' && Number(expMin) <= Number(expMax);
 
   const handleSave = async () => {
-    if (!isValid || !user?.email) return;
+    if (!isValid || !user?.email || !editingJob) return;
     setIsSaving(true);
 
     const fields: JobFormInput = {
@@ -73,13 +73,8 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
     };
 
     try {
-      if (editingJob) {
-        await updateJob(user.email, editingJob.job_id, fields);
-        showToast('Job updated successfully', 'success');
-      } else {
-        await createJob(user.email, fields);
-        showToast('Job created successfully', 'success');
-      }
+      await updateJob(user.email, editingJob.job_id, fields);
+      showToast('Job updated successfully', 'success');
       onSaved();
       onClose();
     } catch (err: any) {
@@ -113,19 +108,6 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
         </div>
 
         <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', overflowY: 'auto', flex: 1 }}>
-          {!editingJob && (
-            <div style={{
-              display: 'flex', gap: '8px', padding: '10px 12px', background: '#FFFBEB',
-              border: '0.5px solid #FCD34D', borderRadius: '8px',
-            }}>
-              <AlertTriangle size={13} color="#B45309" style={{ flexShrink: 0, marginTop: '1px' }} />
-              <span style={{ fontSize: '11px', color: '#92400E', lineHeight: 1.5 }}>
-                Jobs created here don't yet have an AI matching profile — don't run screening
-                on this job until that's enabled.
-              </span>
-            </div>
-          )}
-
           <div>
             <label style={labelStyle}>Job Title</label>
             <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Senior Backend Engineer" style={inputStyle} />
@@ -200,6 +182,151 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
   );
 }
 
+// ── Add Job modal (Job ID + Designation + PDF) ───────────────────────────
+function AddJobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const [jobId, setJobId] = useState('');
+  const [designation, setDesignation] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const jobIdValid = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/.test(jobId.trim());
+  const isValid = jobIdValid && !!file;
+
+  const handleFile = (f: File | null) => {
+    setError(null);
+    if (!f) { setFile(null); return; }
+    if (!f.name.toLowerCase().endsWith('.pdf')) { setFile(null); setError('Only PDF files are supported.'); return; }
+    if (f.size > 10 * 1024 * 1024) { setFile(null); setError('File is too large (max 10 MB).'); return; }
+    setFile(f);
+  };
+
+  const handleSave = async () => {
+    if (!isValid || !file || !user?.email) return;
+    setIsSaving(true);
+    setError(null);
+    try {
+      await createJob(user.email, { jobId, designation, file });
+      showToast('Job created successfully', 'success');
+      onSaved();
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create job');   // e.g. "Job ID 'x' already exists"
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #E5E7EB',
+    fontSize: '13px', outline: 'none', boxSizing: 'border-box', fontFamily: FONT,
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px', display: 'block',
+  };
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+      onClick={e => e.target === e.currentTarget && !isSaving && onClose()}
+    >
+      <div style={{ background: T.white, borderRadius: '14px', width: '100%', maxWidth: '460px', overflow: 'hidden', boxShadow: '0 24px 48px rgba(0,0,0,0.14)', fontFamily: FONT }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: T.text }}>Add Job</h3>
+          <button onClick={onClose} disabled={isSaving} style={{ background: 'none', border: 'none', cursor: isSaving ? 'not-allowed' : 'pointer', color: T.gray400, display: 'flex', padding: '2px' }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label style={labelStyle}>Job ID <span style={{ color: T.red }}>*</span></label>
+            <input
+              value={jobId}
+              onChange={e => { setJobId(e.target.value); setError(null); }}
+              placeholder="e.g. job-005"
+              disabled={isSaving}
+              style={inputStyle}
+            />
+            {jobId && !jobIdValid && (
+              <p style={{ fontSize: '11px', color: T.red, margin: '4px 0 0' }}>
+                Use letters, numbers, "-" or "_" only (2–64 characters, no spaces).
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label style={labelStyle}>Designation <span style={{ color: T.gray400, fontWeight: 400 }}>(optional — taken from the JD if empty)</span></label>
+            <input
+              value={designation}
+              onChange={e => setDesignation(e.target.value)}
+              placeholder="e.g. Senior Backend Engineer"
+              disabled={isSaving}
+              style={inputStyle}
+            />
+          </div>
+
+          <div>
+            <label style={labelStyle}>Job Description (PDF) <span style={{ color: T.red }}>*</span></label>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: '10px', padding: '14px',
+              border: `1.5px dashed ${file ? T.orange : '#D1D5DB'}`, borderRadius: '8px',
+              background: file ? T.orangeLight : T.gray50, cursor: isSaving ? 'not-allowed' : 'pointer',
+            }}>
+              {file ? <FileText size={18} color={T.orange} /> : <Upload size={18} color={T.gray400} />}
+              <span style={{ fontSize: '12px', color: file ? '#9A3412' : T.gray600, fontWeight: file ? 600 : 400, wordBreak: 'break-all' }}>
+                {file ? file.name : 'Click to choose a PDF (max 10 MB)'}
+              </span>
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                disabled={isSaving}
+                style={{ display: 'none' }}
+                onChange={e => handleFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          </div>
+
+          {error && (
+            <div style={{ display: 'flex', gap: '8px', padding: '10px 12px', background: T.redBg, border: '0.5px solid #FCA5A5', borderRadius: '8px' }}>
+              <AlertTriangle size={13} color={T.red} style={{ flexShrink: 0, marginTop: '1px' }} />
+              <span style={{ fontSize: '12px', color: T.red, lineHeight: 1.5 }}>{error}</span>
+            </div>
+          )}
+
+          {isSaving && (
+            <p style={{ fontSize: '11px', color: T.textSub, margin: 0 }}>
+              Reading the JD and building its AI profile — this can take up to a minute…
+            </p>
+          )}
+        </div>
+
+        <div style={{ padding: '12px 20px', borderTop: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'flex-end', gap: '8px', background: T.gray50 }}>
+          <button onClick={onClose} disabled={isSaving} style={{ padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500, background: T.white, border: `1px solid ${T.gray200}`, cursor: isSaving ? 'not-allowed' : 'pointer', color: T.textSub }}>
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!isValid || isSaving}
+            style={{
+              padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 500,
+              background: T.orange, color: T.white, border: 'none',
+              cursor: (!isValid || isSaving) ? 'not-allowed' : 'pointer',
+              opacity: (!isValid || isSaving) ? 0.5 : 1,
+              display: 'flex', alignItems: 'center', gap: '6px',
+            }}
+          >
+            {isSaving && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />}
+            {isSaving ? 'Processing JD…' : 'Create Job'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Confirm dialog for archive / restore ─────────────────────────────────
 function ConfirmDialog({ message, confirmLabel, confirmColor, onConfirm, onCancel, isLoading }: {
   message: string; confirmLabel: string; confirmColor: string;
@@ -233,7 +360,9 @@ export default function JobsTab() {
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState<AdminJob | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<AdminJob | null>(null);
+  const [confirmKind, setConfirmKind] = useState<'delete' | 'restore'>('delete');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadJobs = async () => {
     if (!user?.email) return;
@@ -254,18 +383,25 @@ export default function JobsTab() {
   const openEditModal = (j: AdminJob) => { setEditingJob(j); setShowForm(true); };
 
   const isArchived = (j: AdminJob) => (j.status || '').toLowerCase() === 'archived';
-  const visibleJobs = jobs.filter(j => showArchived ? isArchived(j) : !isArchived(j));
+  const q = searchQuery.trim().toLowerCase();
+  const visibleJobs = jobs
+    .filter(j => showArchived ? isArchived(j) : !isArchived(j))
+    .filter(j => !q ||
+      j.title.toLowerCase().includes(q) ||
+      j.job_id.toLowerCase().includes(q) ||
+      (j.location || '').toLowerCase().includes(q) ||
+      (j.must_have_skills || []).some(s => s.toLowerCase().includes(q)));
 
   const handleConfirmAction = async () => {
     if (!confirmTarget || !user?.email) return;
     setIsProcessing(true);
     try {
-      if (isArchived(confirmTarget)) {
+      if (confirmKind === 'restore') {
         await restoreJob(user.email, confirmTarget.job_id);
         showToast(`${confirmTarget.title} restored (set to Closed)`, 'success');
       } else {
-        await archiveJob(user.email, confirmTarget.job_id);
-        showToast(`${confirmTarget.title} archived`, 'success');
+        await deleteJob(user.email, confirmTarget.job_id);
+        showToast(`${confirmTarget.title} deleted`, 'success');
       }
       setConfirmTarget(null);
       loadJobs();
@@ -278,22 +414,27 @@ export default function JobsTab() {
 
   return (
     <div style={{ fontFamily: FONT }}>
-      {showForm && (
+      {showForm && (editingJob ? (
         <JobFormModal
           editingJob={editingJob}
           onClose={() => setShowForm(false)}
           onSaved={loadJobs}
         />
-      )}
+      ) : (
+        <AddJobModal
+          onClose={() => setShowForm(false)}
+          onSaved={loadJobs}
+        />
+      ))}
       {confirmTarget && (
         <ConfirmDialog
           message={
-            isArchived(confirmTarget)
+            confirmKind === 'restore'
               ? `Restore "${confirmTarget.title}"? It will be set to Closed, not reopened as Active.`
-              : `Archive "${confirmTarget.title}"? It will be hidden from the main job lists until restored.`
+              : `Permanently delete "${confirmTarget.title}" (${confirmTarget.job_id})? This removes the job, its JD file, all its candidates and uploaded resumes. This cannot be undone.`
           }
-          confirmLabel={isArchived(confirmTarget) ? 'Restore' : 'Archive'}
-          confirmColor={isArchived(confirmTarget) ? T.green : T.red}
+          confirmLabel={confirmKind === 'restore' ? 'Restore' : 'Delete'}
+          confirmColor={confirmKind === 'restore' ? T.green : T.red}
           onConfirm={handleConfirmAction}
           onCancel={() => !isProcessing && setConfirmTarget(null)}
           isLoading={isProcessing}
@@ -308,6 +449,15 @@ export default function JobsTab() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ position: 'relative', width: '220px' }}>
+            <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: T.gray400, pointerEvents: 'none' }} />
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search jobs…"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px 7px 30px', fontSize: '12px', fontFamily: FONT, borderRadius: '7px', border: `0.5px solid ${T.gray200}`, outline: 'none', color: T.text, background: T.white }}
+            />
+          </div>
           <button
             onClick={() => setShowArchived(v => !v)}
             style={{
@@ -340,7 +490,7 @@ export default function JobsTab() {
           <div style={{ padding: '40px', textAlign: 'center' }}>
             <Briefcase size={22} color={T.gray200} style={{ margin: '0 auto 8px', display: 'block' }} />
             <p style={{ fontSize: '12px', color: T.gray400, margin: 0 }}>
-              {showArchived ? 'No archived jobs.' : 'No jobs yet — click Add Job to create one.'}
+              {searchQuery ? 'No jobs match your search.' : showArchived ? 'No archived jobs.' : 'No jobs yet — click Add Job to create one.'}
             </p>
           </div>
         ) : (
@@ -377,19 +527,29 @@ export default function JobsTab() {
                     Edit
                   </button>
                 )}
+                {isArchived(j) && (
+                  <button
+                    onClick={() => { setConfirmKind('restore'); setConfirmTarget(j); }}
+                    title="Restore job"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      padding: '5px 10px', fontSize: '11px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer',
+                      background: T.greenBg, color: T.greenText, border: '0.5px solid #6EE7B7',
+                    }}
+                  >
+                    <RotateCcw size={11} /> Restore
+                  </button>
+                )}
                 <button
-                  onClick={() => setConfirmTarget(j)}
-                  title={isArchived(j) ? 'Restore job' : 'Archive job'}
+                  onClick={() => { setConfirmKind('delete'); setConfirmTarget(j); }}
+                  title="Delete job permanently"
                   style={{
                     display: 'flex', alignItems: 'center', gap: '4px',
                     padding: '5px 10px', fontSize: '11px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer',
-                    background: isArchived(j) ? T.greenBg : T.redBg,
-                    color: isArchived(j) ? T.greenText : T.red,
-                    border: `0.5px solid ${isArchived(j) ? '#6EE7B7' : '#FCA5A5'}`,
+                    background: T.redBg, color: T.red, border: '0.5px solid #FCA5A5',
                   }}
                 >
-                  {isArchived(j) ? <RotateCcw size={11} /> : <Archive size={11} />}
-                  {isArchived(j) ? 'Restore' : 'Archive'}
+                  <Trash2 size={11} /> Delete
                 </button>
               </div>
             </div>

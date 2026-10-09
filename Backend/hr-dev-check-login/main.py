@@ -66,7 +66,7 @@ def check_login(request):
         user_roles = [r.strip() for r in row.roles.split(",")]
 
         if requested_role not in user_roles:
-            role_label = {"hr": "HR", "interviewer": "Interviewer", "superuser": "Superuser"}.get(requested_role, requested_role)
+            role_label = {"hr": "HR", "interviewer": "Interviewer"}.get(requested_role, requested_role)
             return ({"allowed": False, "reason": f"You don't have permission to log in as {role_label}."}, 200, headers)
 
         # Update last_login_at

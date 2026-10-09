@@ -42,7 +42,7 @@ export const router = createBrowserRouter([
   {
     path: "/jobs",
     element: (
-      <ProtectedRoute>
+      <ProtectedRoute allowedRoles={["hr", "interviewer", "user"]}>
         <JobListPage />
       </ProtectedRoute>
     ),
@@ -99,7 +99,7 @@ export const router = createBrowserRouter([
   {
     path: "/jobs/:jobId/candidates/:candidateId/offer",
     element: (
-      <ProtectedRoute>
+      <ProtectedRoute allowedRoles={["hr"]}>
         <OfferGenerationPage />
       </ProtectedRoute>
     ),
@@ -107,7 +107,7 @@ export const router = createBrowserRouter([
   {
     path: "/jobs/:jobId/shortlisted",
     element: (
-      <ProtectedRoute>
+      <ProtectedRoute allowedRoles={["hr"]}>
         <ShortlistedPage />
       </ProtectedRoute>
     ),
@@ -123,7 +123,7 @@ export const router = createBrowserRouter([
   {
     path: "/jobs/:jobId",
     element: (
-      <ProtectedRoute>
+      <ProtectedRoute allowedRoles={["hr"]}>
         <JobResultsPage />
       </ProtectedRoute>
     ),
