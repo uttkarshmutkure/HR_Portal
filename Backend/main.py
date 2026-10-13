@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from routers.chat_agent import router as chat_agent_router
 from routers.check_login import router as check_login_router
@@ -16,8 +17,18 @@ from routers.save_candidate_slots import router as save_candidate_slots_router
 from routers.automatchmaker import router as automatchmaker_router
 from routers.agentic_flow import router as agentic_flow_router
 from routers.refer_candidate import router as refer_candidate_router
+from routers.manage_jobs.router import router as manage_jobs_router
+from routers.manage_users.router import router as manage_users_router
 
 app = FastAPI(title="Atgeir HireDesk Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(chat_agent_router)
 app.include_router(check_login_router)
@@ -35,6 +46,8 @@ app.include_router(save_candidate_slots_router)
 app.include_router(automatchmaker_router)
 app.include_router(agentic_flow_router)
 app.include_router(refer_candidate_router)
+app.include_router(manage_jobs_router)
+app.include_router(manage_users_router)
 
 @app.get("/healthz")
 def healthz():

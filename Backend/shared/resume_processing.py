@@ -31,7 +31,7 @@ import config
 
 PROJECT_ID      = config.GCP_PROJECT_ID
 BUCKET_NAME     = config.GCS_BUCKET_NAME
-FOLDER_PATH     = "resume"
+FOLDER_PATH     = "resumes"
 DATASET_ID      = config.BQ_DATASET_ID
 TABLE_ID        = "candidates"
 GEMINI_LOCATION    = config.VERTEX_AI_LOCATION
@@ -434,7 +434,7 @@ def _is_path_already_processed(file_name: str, job_id: str) -> bool:
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ScalarQueryParameter("job_id",       "STRING", job_id),
-            bigquery.ScalarQueryParameter("gcs_pdf_path", "STRING", f"gs://{BUCKET_NAME}/{file_name}"),
+            bigquery.ScalarQueryParameter("gcs_pdf_path", "STRING", f"gs://{BUCKET_NAME}/{file_name}")
         ]
     )
     rows = list(bq_client.query(query, job_config=job_config).result())

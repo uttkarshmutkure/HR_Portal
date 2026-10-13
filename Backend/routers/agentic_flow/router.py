@@ -177,7 +177,7 @@ def _ensure_job_exists(job_id: str) -> bool:
 def _sync_new_resumes_from_bucket(job_id: str) -> int:
     """Scans resume/{job_id}/ in GCS and processes any PDFs not yet in BQ.
     Returns the count of newly processed resumes."""
-    prefix = f"resume/{job_id}/"
+    prefix = f"resumes/{job_id}/"
     bucket_obj = gcs_client.bucket(BUCKET_NAME)
     pdf_blobs = [
         b.name for b in bucket_obj.list_blobs(prefix=prefix)

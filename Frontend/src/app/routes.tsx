@@ -1,0 +1,148 @@
+import { createBrowserRouter } from "react-router";
+import DashboardPage           from "./pages/DashboardPage"; 
+import JobListPage             from "./pages/JobListPage";
+import JobResultsPage          from "./pages/JobResultsPage";
+import CandidateDetailPage     from "./pages/CandidateDetailPage";
+import ShortlistedPage         from "./pages/ShortlistedPage";
+import InterviewPipelinePage   from "./pages/InterviewPipelinePage";
+import CandidateTimelinePage   from "./pages/CandidateTimelinePage";
+import FeedbackFormPage        from "./pages/Feedbackformpage";
+import CandidateSlotPage       from "./pages/Candidateslotpage";
+import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IMPORT
+import LoginPage               from "./pages/LoginPage";
+import ProtectedRoute          from "./components/ProtectedRoute";
+import CandidateReviewPage     from "./pages/CandidateReviewPage";
+
+// ── Import the Global Hub Pages ──
+import { 
+  GlobalShortlistedPage, 
+  GlobalInterviewsPage, 
+  //GlobalTimelinePage, 
+  GlobalFeedbackPage 
+} from "./pages/GlobalSidebarPages";
+
+export const router = createBrowserRouter([
+  {
+    path: "/",
+    Component: LoginPage,
+  },
+  {
+    path: "/login",
+    Component: LoginPage,
+  },
+    {
+    path: "/dashboard", 
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <DashboardPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/jobs",
+    element: (
+      <ProtectedRoute allowedRoles={["hr", "interviewer", "user"]}>
+        <JobListPage />
+      </ProtectedRoute>
+    ),
+  },
+  
+  // ── Global Sidebar Hub Routes ──
+  {
+    path: "/shortlisted",
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <GlobalShortlistedPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/interviews",
+    element: (
+      <ProtectedRoute>
+        <GlobalInterviewsPage />
+      </ProtectedRoute>
+    ),
+  },
+  // {
+  //   path: "/timeline",
+  //   Component: GlobalTimelinePage,
+  // },
+  {
+    path: "/feedback",
+    element: (
+      <ProtectedRoute>
+        <GlobalFeedbackPage />
+      </ProtectedRoute>
+    ),
+  },
+
+  // ── Dynamic / Specific Job & Candidate Routes ──
+  {
+    path: "/jobs/:jobId/candidates/:candidateId/timeline",
+    element: (
+      <ProtectedRoute>
+        <CandidateTimelinePage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/jobs/:jobId/candidates/:candidateId",
+    element: (
+      <ProtectedRoute>
+        <CandidateDetailPage />
+      </ProtectedRoute>
+    ),
+  },
+  // ── NEW: Dedicated Offer Copilot Route ──
+  {
+    path: "/jobs/:jobId/candidates/:candidateId/offer",
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <OfferGenerationPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/jobs/:jobId/shortlisted",
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <ShortlistedPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/jobs/:jobId/pipeline",
+    element: (
+      <ProtectedRoute>
+        <InterviewPipelinePage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: "/jobs/:jobId",
+    element: (
+      <ProtectedRoute allowedRoles={["hr"]}>
+        <JobResultsPage />
+      </ProtectedRoute>
+    ),
+  },
+  
+  // ── Public feedback link (no auth) ──
+  {
+    path: "/feedback/:token",
+    Component: FeedbackFormPage,
+  },
+
+  // ── Public slot selection link (no auth) ──
+  {
+    path: "/schedule/:token",
+    Component: CandidateSlotPage,
+  },
+
+  // ── Public candidate review link (no auth) ──
+  {
+    path: "/candidate-review/:token",
+    Component: CandidateReviewPage,
+  },
+]);
