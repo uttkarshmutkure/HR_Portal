@@ -1830,7 +1830,118 @@ paths:
         '204':
           description: No Content
 
+  # =========================
+  # HR SCREENING - Candidate Form (public: candidate opens / submits)
+  # =========================
+  /hr-screening/candidate-form:
+    post:
+      summary: Load or submit the candidate details form
+      operationId: hr-screening-candidate-form-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-candidate-form
+        deadline: 60.0
+      responses:
+        '200':
+          description: Form loaded or submitted successfully
+        '400':
+          description: Missing or invalid answers
+        '401':
+          description: Invalid or expired link
+        '409':
+          description: Form already submitted
+        '500':
+          description: Internal server error
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-candidate-form-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-candidate-form
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
 
+  # =========================
+  # HR SCREENING - Create Form Link (HR: used when sending the invite)
+  # =========================
+  /hr-screening/create-form-link:
+    post:
+      summary: Create a signed candidate form link and mark the form as sent
+      operationId: hr-screening-create-form-link-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-create-form-link
+        deadline: 60.0
+      responses:
+        '200':
+          description: Link created
+        '404':
+          description: Candidate not found
+        '500':
+          description: Internal server error
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-create-form-link-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-create-form-link
+        deadline: 10.0
+      responses:
+        '204':
+          description: No Content
+
+  # =========================
+  # HR SCREENING - Preboarding Documents
+  # =========================
+  /hr-screening/preboarding:
+    post:
+      summary: Preboarding documents (candidate upload, HR verify/reject, link create/resend/extend)
+      operationId: hr-screening-preboarding-post
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-preboarding
+        deadline: 60.0
+        disable_auth: true
+      responses:
+        '200':
+          description: Action completed successfully
+        '400':
+          description: Missing or invalid payload
+        '401':
+          description: Invalid or expired link, or unauthorised HR/internal call
+        '404':
+          description: Preboarding record or document not found
+        '409':
+          description: Document already verified, or not in a state that allows this action
+        '410':
+          description: Upload deadline has passed
+        '413':
+          description: File larger than 5 MB
+        '415':
+          description: File type not allowed (PDF, JPG or PNG only)
+        '500':
+          description: Internal server error
+
+    options:
+      summary: CORS preflight
+      operationId: hr-screening-preboarding-cors
+      x-google-allow: all
+      security: []
+      x-google-backend:
+        address: https://asia-south1-atgeir-moae-dev.cloudfunctions.net/hr-dev-preboarding
+        deadline: 10.0
+        disable_auth: true
+      responses:
+        '204':
+          description: No Content
+          
   # TrendCraft Cloud Functions #
   # ---------------- IMAGE GENERATION ----------------
   /trendcraft/generate-image:

@@ -534,8 +534,8 @@ def process_resume_from_gcs(
               target.file_hash = source.file_hash
               -- same person, different/edited resume — match on email or phone,
               -- but only when that field is actually populated on both sides
-              OR (source.email != '' AND target.email = source.email)
-              OR (source.phone != '' AND target.phone = source.phone)
+            OR (source.email NOT IN ('', 'Unknown') AND target.email = source.email)
+            OR (source.phone NOT IN ('', 'Unknown') AND target.phone = source.phone)
             )
 
         WHEN NOT MATCHED THEN

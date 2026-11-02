@@ -57,6 +57,7 @@ def _salary_rules_hash(salary_rules: dict) -> str:
     This ensures that changing the Salary Panel starts a FRESH conversation
     instead of letting old chat history (with stale numbers) leak into new replies."""
     merged = {**DEFAULT_SALARY_RULES, **(salary_rules or {})}
+    merged.pop("offerValidityDays", None)
     canonical = json.dumps(merged, sort_keys=True)
     return hashlib.sha1(canonical.encode()).hexdigest()[:8]
 
@@ -241,15 +242,16 @@ def _set_offer_response_token(job_id: str, candidate_id: str, validity_days: int
     return {"token": token, "accept_url": accept_url, "reject_url": reject_url}
 
 
-def _inject_offer_buttons(html: str, accept_url: str, reject_url: str) -> str:
+def _inject_offer_buttons(html: str, accept_url: str, reject_url: str, validity_days: int = 7) -> str:
     """Insert Accept/Reject buttons into the already-wrapped offer email HTML,
     right before the closing 'Best regards' line. Falls back to appending at
     the end if that anchor text isn't found."""
+    day_word = "day" if validity_days == 1 else "days"
     buttons_html = f"""
     <div style="margin:24px 0;text-align:center;">
       <a href="{accept_url}" style="display:inline-block;margin:0 8px;padding:10px 24px;background:#16A34A;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Accept Offer</a>
       <a href="{reject_url}" style="display:inline-block;margin:0 8px;padding:10px 24px;background:#DC2626;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Reject Offer</a>
-      <p style="margin:10px 0 0;font-size:12px;color:#9CA3AF;">This link expires in 7 days.</p>
+      <p style="margin:10px 0 0;font-size:12px;color:#9CA3AF;">This link expires in {validity_days} {day_word}.</p>
     </div>
     """
     anchor = "Best regards,<br><strong>Atgeir Solutions HR Team</strong></p>"
@@ -358,6 +360,59 @@ def _fetch_prior_offers(job_id: str, candidate_id: str) -> list:
         for r in rows
     ]
 
+MIN_VALIDITY_DAYS, MAX_VALIDITY_DAYS = 1, 90
+
+def _clamp_days(v) -> int:
+    """Keep validity days between 1 and 90. Falls back to the default if invalid."""
+    try:
+        return max(MIN_VALIDITY_DAYS, min(MAX_VALIDITY_DAYS, int(v)))
+    except (TypeError, ValueError):
+        return DEFAULT_SALARY_RULES["offerValidityDays"]
+
+
+def _get_job_validity(job_id: str) -> int:
+    """Read the saved validity days for this job. Returns the default (7) if none saved."""
+    rows = list(bq_client.query(
+        f"SELECT offer_validity_days FROM `{project_id}.{dataset_id}.job_offer_settings` "
+        f"WHERE job_id = @job_id LIMIT 1",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id)
+        ])
+    ))
+    if rows and rows[0].offer_validity_days:
+        return _clamp_days(rows[0].offer_validity_days)
+    return DEFAULT_SALARY_RULES["offerValidityDays"]
+
+
+def _save_job_validity(job_id: str, days) -> None:
+    """Save (insert or update) the validity days for this job."""
+    q = f"""
+        MERGE `{project_id}.{dataset_id}.job_offer_settings` T
+        USING (SELECT @job_id AS job_id) S ON T.job_id = S.job_id
+        WHEN MATCHED THEN
+          UPDATE SET offer_validity_days = @days, updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN
+          INSERT (job_id, offer_validity_days, updated_at)
+          VALUES (@job_id, @days, CURRENT_TIMESTAMP())
+    """
+    bq_client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+        bigquery.ScalarQueryParameter("days", "INT64", _clamp_days(days)),
+    ])).result()
+
+
+def _handle_job_settings(body: dict, headers: dict, save: bool):
+    """Backs the get_job_settings / save_job_settings actions (wired up in Step 3)."""
+    job_id = body.get('jobId', '')
+    if not job_id:
+        return (json.dumps({"error": "Missing jobId"}), 400, headers)
+    if save:
+        _save_job_validity(job_id, body.get('offerValidityDays'))
+    return (
+        json.dumps({"offerValidityDays": _get_job_validity(job_id)}),
+        200,
+        {**headers, "Content-Type": "application/json"}
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT BUILDERS
@@ -621,7 +676,22 @@ def _handle_offer_response(request, headers: dict):
     ])).result()
 
     if new_status == 'accepted':
+        # Documentation email is sent manually by HR now.
         return (_response_page("Offer Accepted", "Thank you! Your response has been recorded. Our HR team will reach out with next steps.", "#16A34A"), 200, html_headers)
+
+    # Offer declined -> archive candidate (UI treats 'Rejected' as Archived)
+    try:
+        bq_client.query(
+            f"UPDATE `{project_id}.{dataset_id}.candidates` "
+            f"SET candidate_result = 'Rejected' "
+            f"WHERE candidate_id = @candidate_id AND job_id = @job_id",
+            job_config=bigquery.QueryJobConfig(query_parameters=[
+                bigquery.ScalarQueryParameter("candidate_id", "STRING", row.candidate_id),
+                bigquery.ScalarQueryParameter("job_id", "STRING", row.job_id),
+            ])).result()
+    except Exception as e:
+        print(f"[offer_agent] archive-on-reject failed: {e}")
+
     return (_response_page("Offer Declined", "Your response has been recorded. Thank you for letting us know.", "#DC2626"), 200, html_headers)
 
 
@@ -660,6 +730,10 @@ def offer_agent(request):
             return _handle_generate(body, headers)
         elif action == 'get_offers':
             return _handle_get_offers(body, headers)
+        elif action == 'get_job_settings':
+            return _handle_job_settings(body, headers, save=False)
+        elif action == 'save_job_settings':
+            return _handle_job_settings(body, headers, save=True)
         else:
             return (json.dumps({"error": f"Unknown action: {action}"}), 400, headers)
 
@@ -836,11 +910,18 @@ def _handle_generate(body: dict, headers: dict):
     pdf_base64   = body.get('pdfBase64', '')
     pdf_filename = body.get('pdfFilename', 'Offer_Letter.pdf')
 
-    offer_validity_days = salary_rules.get('offerValidityDays', DEFAULT_SALARY_RULES['offerValidityDays'])
+    offer_validity_days = _clamp_days(salary_rules.get('offerValidityDays', DEFAULT_SALARY_RULES['offerValidityDays']))
 
     if not job_id or not candidate_id:
         return (json.dumps({"error": "Missing jobId or candidateId"}), 400, headers)
-
+    existing = list(bq_client.query(
+        f"SELECT status FROM `{project_id}.{dataset_id}.offer_letters` "
+        f"WHERE job_id=@j AND candidate_id=@c LIMIT 1",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("j", "STRING", job_id),
+            bigquery.ScalarQueryParameter("c", "STRING", candidate_id)])))
+    if existing and existing[0].status == 'accepted':
+        return (json.dumps({"error": "Offer already accepted; it cannot be regenerated."}), 409, headers)
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_c      = ex.submit(_fetch_candidate, candidate_id)
         f_j      = ex.submit(_fetch_job, job_id)
@@ -890,7 +971,7 @@ def _handle_generate(body: dict, headers: dict):
                 .replace('{support_footer}', SUPPORT_FOOTER)
                 .replace('{offer_body}', simple_body)
             )
-            final_html = _inject_offer_buttons(final_html, links["accept_url"], links["reject_url"])
+            final_html = _inject_offer_buttons(final_html, links["accept_url"], links["reject_url"], offer_validity_days)
 
             attachments = None
             if pdf_base64:

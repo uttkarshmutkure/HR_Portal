@@ -3,6 +3,8 @@ import { useParams } from 'react-router';
 import { CheckCircle, XCircle, AlertTriangle, PauseCircle, Star } from 'lucide-react';
 import { FeedbackTokenService, FeedbackTokenPayload } from '../../services/feedbackTokenService';
 import { EmailService } from '../../services/emailService';
+import { InterviewRound, DEFAULT_ROUNDS, normalizeRounds } from '../../services/roundConfig';
+
 
 const FONT = 'Inter, sans-serif';
 
@@ -11,22 +13,6 @@ const makeSlotToken = (jobId: string, candidateId: string, candName: string, can
   return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 };
 
-const ROUND_LABELS: Record<string, string> = {
-  round1:    'Round 1 (Technical)',
-  technical: 'Round 2 (Advanced Technical)',
-  hr:        'HR Round',
-};
-
-const NEXT_ROUND: Record<string, string | null> = {
-  round1:    'technical',
-  technical: 'hr',
-  hr:        null,
-};
-
-const NEXT_ROUND_LABELS: Record<string, string> = {
-  technical: 'Round 2 (Advanced Technical)',
-  hr:        'HR Round',
-};
 
 // --- CSS for Star Animations and Standard Styling ---
 const formCss = `
@@ -143,12 +129,21 @@ export default function FeedbackFormPage() {
   const [submitError,   setSubmitError]   = useState('');
   const [isHoldReopen,  setIsHoldReopen]  = useState(false);
   const [msLeft,        setMsLeft]        = useState<number | null>(null);
+  const [rounds, setRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
 
   useEffect(() => {
     if (!token) { setTokenError('invalid'); return; }
     const parsed = FeedbackTokenService.parse(token);
     if (!parsed) { setTokenError('invalid'); return; }
     if (FeedbackTokenService.isExpired(parsed)) { setTokenError('expired'); return; }
+    fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId: parsed.jobId }),
+    })
+      .then(r => r.json())
+      .then(d => setRounds(normalizeRounds(d.rounds)))
+      .catch(() => {});
 
     fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
       method: 'POST',
@@ -172,7 +167,7 @@ export default function FeedbackFormPage() {
             const prev = result.previousFeedback;
             if (prev) {
               setNotes(prev.notes || '');
-              if (parsed.round === 'round1' || parsed.round === 'technical') {
+              if (parsed.round !== 'hr') {
                 setTechRating(prev.techSkill ? Number(prev.techSkill) : null);
                 setCommRating(prev.communication ? Number(prev.communication) : null);
               }
@@ -203,8 +198,13 @@ export default function FeedbackFormPage() {
     return `${mins}m`;
   };
 
-  const isTechRound = payload?.round === 'round1' || payload?.round === 'technical';
-  const isHrRound   = payload?.round === 'hr';
+  const curIdx      = rounds.findIndex(r => r.id === payload?.round);
+  const curRound    = rounds[curIdx];
+  const nextRound   = curIdx >= 0 ? rounds[curIdx + 1] : undefined;
+  const isLastRound = curIdx >= 0 && curIdx === rounds.length - 1;
+  const roundLabel  = curRound?.label ?? payload?.round ?? '';
+  const isTechRound = curRound?.kind === 'technical';
+  const isHrRound   = curRound?.kind === 'hr';
 
   let overallRating = 0;
   if (isTechRound) {
@@ -254,9 +254,9 @@ export default function FeedbackFormPage() {
     
     return <StatusScreen
       icon={isAdvance ? <CheckCircle size={22} color="#10B981"/> : isHold ? <PauseCircle size={22} color="#3B82F6"/> : <XCircle size={22} color="#DC2626"/>}
-      title={isAdvance ? (isHrRound ? 'Moving to Offer Stage!' : 'Candidate Advanced!') : isHold ? 'Candidate on Hold' : 'Candidate Rejected'}
+      title={isAdvance ? (isLastRound ? 'Moving to Offer Stage!' : 'Candidate Advanced!') : isHold ? 'Candidate on Hold' : 'Candidate Rejected'}
       message={isAdvance
-        ? isHrRound
+        ? isLastRound
           ? `${payload.candidateName} has successfully completed all interview rounds and has been moved to the Offer Stage.`
           : `${payload.candidateName} has been moved to the next round. They will receive a slot selection email shortly.`
         : isHold 
@@ -296,7 +296,7 @@ export default function FeedbackFormPage() {
       const toEmail = (payload as any).candidateEmail || '';
 
       if (verdict === 'advance') {
-        if (isHrRound) {
+        if (isLastRound) {
           // HR round: candidate selected → send selection email
           const selectionHtml = `
             <div style="font-family:Inter,sans-serif;max-width:560px;margin:0 auto;background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
@@ -327,11 +327,10 @@ export default function FeedbackFormPage() {
           await EmailService.send({ to: toEmail, subject: `You've Been Selected — ${payload.jobTitle} at Atgeir Solutions`, body: selectionHtml });
         } else {
           // Other rounds: invite to next round slot selection
-          const nextRound = NEXT_ROUND[payload.round];
           if (nextRound) {
-            const slotToken = makeSlotToken(payload.jobId, payload.candidateId, payload.candidateName, '', nextRound);
+            const slotToken = makeSlotToken(payload.jobId, payload.candidateId, payload.candidateName, '', nextRound.id);
             const slotLink  = `${window.location.origin}/schedule/${slotToken}`;
-            const nextLabel = NEXT_ROUND_LABELS[nextRound];
+            const nextLabel = nextRound.label;
             const emailBody = `
               <div style="font-family:Inter,sans-serif;max-width:560px;margin:0 auto;background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
                 <div style="background:#F07C2D;padding:24px 28px;">
@@ -341,7 +340,7 @@ export default function FeedbackFormPage() {
                 <div style="padding:28px;">
                   <p style="margin:0 0 16px;font-size:14px;color:#374151;">Dear <strong>${payload.candidateName}</strong>,</p>
                   <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
-                    Congratulations! You've successfully cleared the <strong>${ROUND_LABELS[payload.round]}</strong>.
+                    Congratulations! You've successfully cleared the <strong>${roundLabel}</strong>.
                     We'd like to invite you to the next stage: <strong>${nextLabel}</strong>.
                   </p>
                   <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
@@ -393,7 +392,6 @@ export default function FeedbackFormPage() {
     }
   };
 
-  const roundLabel = ROUND_LABELS[payload.round] ?? payload.round;
 
   return (
     <div style={{ minHeight: '100vh', background: '#F9FAFB', fontFamily: FONT, padding: '40px 20px', boxSizing: 'border-box' }}>
@@ -513,7 +511,7 @@ export default function FeedbackFormPage() {
                     ? "Please complete all performance metrics first" 
                     : overallRating < 2.5 
                       ? "Deactivated because overall rating is below 2.5" 
-                      : isHrRound ? "Move candidate to Offer Stage" : "Advance candidate to the next round"
+                      : isLastRound ? "Move candidate to Offer Stage" : "Advance candidate to the next round"
                 }
                 style={{
                   padding: '12px 8px', borderRadius: 8, fontFamily: FONT,
@@ -526,7 +524,7 @@ export default function FeedbackFormPage() {
                 }}
               >
                 <CheckCircle size={18} color={verdict === 'advance' ? '#fff' : '#10B981'} />
-                <span style={{ fontSize: 12, fontWeight: 500 }}>{isHrRound ? 'Offer Stage' : 'Advance'}</span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>{isLastRound ? 'Offer Stage' : 'Advance'}</span>
                 
               </button>
 

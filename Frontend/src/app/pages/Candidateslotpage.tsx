@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import { Calendar as CalendarIcon, CheckCircle, CalendarX2, Info } from 'lucide-react';
+import { InterviewRound, DEFAULT_ROUNDS, normalizeRounds } from '../../services/roundConfig';
 
 const FONT = 'Inter, sans-serif';
 const COLOR_PRIMARY = '#1D194B';
@@ -55,6 +56,7 @@ export default function CandidateSlotPage() {
   const [selectedSlots, setSelectedSlots] = useState<{ day: string; start_time: string; end_time: string; work_mode: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [rounds, setRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
 
   useEffect(() => {
     try {
@@ -96,11 +98,29 @@ export default function CandidateSlotPage() {
     if (!invite) return;
     setSlotsLoading(true);
 
-    fetch(GET_CANDIDATE_SLOTS_URL, {
+    // Load this job's rounds first, then fetch slots (so isFirstRound is correct)
+    fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: invite.jobId, candidateId: invite.candidateId, round: invite.round }),
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId: invite.jobId }),
     })
+      .then(r => r.json())
+      .then(d => normalizeRounds(d.rounds))
+      .catch(() => DEFAULT_ROUNDS)
+      .then(loaded => {
+        setRounds(loaded);
+        return fetch(GET_CANDIDATE_SLOTS_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobId: invite.jobId,
+            candidateId: invite.candidateId,
+            round: invite.round,
+            isFirstRound: loaded[0]?.id === invite.round,
+          }),
+        });
+      })
+
       .then(r => r.json())
         .then(data => {
         if (data.success && Array.isArray(data.slots)) {
@@ -131,8 +151,10 @@ export default function CandidateSlotPage() {
     );
   }
 
-  const duration = invite.round === 'technical' ? 60 : 30;
-  const roundLabel = invite.round === 'round1' ? 'First Round (Technical)' : invite.round === 'technical' ? 'Second Round (Advanced)' : 'HR Round';
+  const roundIdx   = rounds.findIndex(r => r.id === invite.round);
+  const curRound   = rounds[roundIdx];
+  const duration   = (curRound as any)?.duration ?? (roundIdx === 0 || curRound?.kind === 'hr' ? 30 : 60);
+  const roundLabel = curRound?.label ?? invite.round;
 
   const toggleRealSlot = (slot: { day: string; start_time: string; end_time: string; work_mode: string }) => {
     const existingIndex = selectedSlots.findIndex(

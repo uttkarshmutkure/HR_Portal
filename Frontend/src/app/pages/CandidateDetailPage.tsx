@@ -345,6 +345,87 @@ function ResumeNotesDropdown({ jobId, candidateId }: { jobId: string; candidateI
   );
 }
 
+
+// ── Candidate Form Panel (answers from the JD + question form email) ───────────
+const FORM_LABELS: [string, string][] = [
+  ['expected_ctc_lpa',       'Expected CTC (LPA)'],
+  ['current_ctc_lpa',        'Current CTC (LPA)'],
+  ['notice_period_days',     'Notice period (days)'],
+  ['notice_negotiable',      'Notice negotiable'],
+  ['negotiable_days',        'Can be reduced to (days)'],
+  ['offer_in_hand',          'Offer in hand'],
+  ['offer_details',          'Offer details'],
+  ['total_experience_years', 'Total experience (yrs)'],
+  ['current_employer',       'Current / last employer'],
+  ['education',              'Education'],
+  ['key_skills',             'Key skills'],
+  ['location',               'Current location'],
+  ['preferred_location',     'Preferred location'],
+  ['gender',                 'Gender'],
+  ['mobile',                 'Mobile'],
+];
+
+function ScreeningFormPanel({ jobId, candidateId }: { jobId: string; candidateId: string }) {
+  const [loading,     setLoading    ] = useState(true);
+  const [sentAt,      setSentAt     ] = useState<string | null>(null);
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
+  const [form,        setForm       ] = useState<Record<string, any> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_SCREENING_FORM', jobId, candidateId }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (!alive) return;
+        setSentAt(d.sent_at ?? null);
+        setSubmittedAt(d.submitted_at ?? null);
+        setForm(d.form ?? null);
+      })
+      .catch(console.error)
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [jobId, candidateId]);
+
+  const fmt = (v: string) => new Date(v).toLocaleDateString();
+
+  const badge = submittedAt
+    ? <span style={{ fontSize: '10px', fontWeight: 600, background: '#ECFDF5', color: '#065F46', padding: '2px 8px', borderRadius: '12px' }}>Received {fmt(submittedAt)}</span>
+    : sentAt
+    ? <span style={{ fontSize: '10px', fontWeight: 600, background: '#F3F4F6', color: '#6B7280', padding: '2px 8px', borderRadius: '12px' }}>Sent {fmt(sentAt)}</span>
+    : undefined;
+
+  return (
+    <Panel title="Candidate Form Responses" badge={badge}>
+      {loading && <p style={{ fontSize: '12px', color: '#9CA3AF', fontFamily: FONT, margin: 0 }}>Loading…</p>}
+
+      {!loading && !sentAt && !submittedAt && (
+        <p style={{ fontSize: '12px', color: '#9CA3AF', fontFamily: FONT, margin: 0 }}>The candidate form has not been sent yet.</p>
+      )}
+
+      {!loading && sentAt && !submittedAt && (
+        <p style={{ fontSize: '12px', color: '#6B7280', fontFamily: FONT, margin: 0 }}>Form sent. Waiting for the candidate to respond.</p>
+      )}
+
+      {!loading && submittedAt && form && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
+          {FORM_LABELS.filter(([k]) => form[k] !== undefined && form[k] !== '').map(([k, label]) => (
+            <div key={k}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '3px' }}>{label}</div>
+              <div style={{ fontSize: '12px', fontWeight: 500, color: '#111827', fontFamily: FONT, textTransform: 'capitalize' }}>
+                {String(form[k]).replace(/_/g, ' ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function CandidateDetailPage() {
   const { jobId, candidateId } = useParams<{ jobId: string; candidateId: string }>();
@@ -470,6 +551,11 @@ export default function CandidateDetailPage() {
               candidateId={candidate.candidate_id} 
             />
 
+            <ScreeningFormPanel
+              jobId={jobId ?? ''}
+              candidateId={candidate.candidate_id}
+            />
+            
             {/* Score Breakdown */}
             <Panel title="Score Breakdown">
               <ScoreBar label="Similarity Score"    value={candidate.similarity_score} />

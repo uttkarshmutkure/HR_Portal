@@ -64,3 +64,7 @@ export const setUserStatus = async (
     status,
   });
 };
+
+export const deleteUser = async (requesterEmail: string, userId: string): Promise<void> => {
+  await callManageUsers({ type: 'DELETE_USER', requester_email: requesterEmail, user_id: userId });
+};

@@ -243,17 +243,17 @@ export default function OfferGenerationPage() {
     }).catch(console.error);
   }, [jobId]);
 
-  // Load saved offers from DB
+  // Load this job's saved offer validity days
   useEffect(() => {
     if (!jobId || !OFFER_API) return;
     fetch(OFFER_API, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'get_offers', jobId }),
-    }).then(r => r.json()).then(data => {
-      const map: Record<string, OfferDraft> = {};
-      (data.offers ?? []).forEach((o: any) => { map[o.candidateId] = o.draft; });
-      setSavedOffers(map);
-    });
+      body: JSON.stringify({ action: 'get_job_settings', jobId }),
+    }).then(r => r.json()).then(d => {
+      if (d.offerValidityDays) {
+        setSalaryRules(p => ({ ...p, offerValidityDays: d.offerValidityDays }));
+      }
+    }).catch(console.error);
   }, [jobId]);
 
   if (!cand) return null;
@@ -360,9 +360,10 @@ interface OfferChatPanelProps {
   onBack: () => void;
 }
 
-function EmailPreviewModal({ subject, body, onSubjectChange, onBodyChange, onConfirm, onClose }: {
-  subject: string; body: string;
+function EmailPreviewModal({ subject, body, days, onSubjectChange, onBodyChange, onDaysChange, onConfirm, onClose }: {
+  subject: string; body: string; days: number;
   onSubjectChange: (v: string) => void; onBodyChange: (v: string) => void;
+  onDaysChange: (n: number) => void;
   onConfirm: () => void; onClose: () => void;
 }) {
   return (
@@ -371,6 +372,12 @@ function EmailPreviewModal({ subject, body, onSubjectChange, onBodyChange, onCon
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4, color: TEXT_DARK }}>Review Offer Email</div>
         <div style={{ fontSize: 12, color: TEXT_MID, marginBottom: 16 }}>Edit the subject or message before sending. The offer letter PDF is attached automatically.</div>
 
+        <label style={labelStyle}>Offer validity (days), applies to all offers for this job</label>
+        <input
+          type="number" min={1} max={90} value={days}
+          onChange={e => onDaysChange(Number(e.target.value))}
+          style={{ ...inputStyle, width: 120, marginBottom: 14 }}
+        />
         <label style={labelStyle}>Subject</label>
         <input
           value={subject}
@@ -768,7 +775,13 @@ function OfferChatPanel({
               filename:     `Offer_Letter_${firstName}.pdf`,
               image:        { type: 'jpeg', quality: 1.0 },
               html2canvas:  { scale: 2, useCORS: true },
-              jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+              jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+              // NEW: smart page breaks
+              pagebreak:    {
+                mode:   ['css', 'legacy'],
+                before: '.page-break-before',          // force a new page here
+                avoid:  ['p', 'tr', '.avoid-break'],   // never split these across pages
+              },
             };
 
             const pdfDataUri = await iWin.html2pdf().set(opt).from(element).outputPdf('datauristring');
@@ -825,6 +838,15 @@ function OfferChatPanel({
     onSetTyping(true);
 
     try {
+      // Remember this job's validity days for future offers
+      await fetch(OFFER_API, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_job_settings',
+          jobId,
+          offerValidityDays: salaryRules.offerValidityDays,
+        }),
+      }).catch(console.error);
       const saveRes = await fetch(OFFER_API, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -858,6 +880,11 @@ function OfferChatPanel({
     }
   };
 
+  const handleValidityChange = (n: number) => {
+    const days = Math.min(90, Math.max(1, n || 1));
+    setSalaryRules({ ...salaryRules, offerValidityDays: days });
+    setEmailBody(b => b.replace(/within \d+ days/, `within ${days} days`));
+  };
   const bounceCss = `@keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-5px)} }`;
 
   if (viewMode === 'chat-only') {
@@ -906,6 +933,8 @@ function OfferChatPanel({
             onBodyChange={setEmailBody}
             onConfirm={handleConfirmSendOffer}
             onClose={() => setShowEmailModal(false)}
+            days={salaryRules.offerValidityDays}
+            onDaysChange={handleValidityChange}
           />
         )}
         <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
@@ -944,6 +973,8 @@ function OfferChatPanel({
           onBodyChange={setEmailBody}
           onConfirm={handleConfirmSendOffer}
           onClose={() => setShowEmailModal(false)}
+          days={salaryRules.offerValidityDays}
+          onDaysChange={handleValidityChange}
         />
       )}
       <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.png,.jpg,.jpeg" onChange={handleFileUpload} />
@@ -1093,12 +1124,12 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
       <p style={{ margin: '0 0 14px' }}>We welcome you to join the Company and would be happy if you can sign the duplicate copy of this letter in token of your acceptance of the offer of employment with the Company.</p>
       <p style={{ margin: '0 0 14px' }}>If you have any question, please clarify from the undersigned.</p>
       <p style={{ margin: '0 0 14px' }}>With regards,</p>
-      <div style={{ marginTop: 40, marginBottom: 48 }}>
+      <div style={{ marginTop: 40, marginBottom: 0 }}>z
         {/* <div style={{ borderTop: '1px solid #374151', width: 180, paddingTop: 6, fontSize: 12 }}>____________________________</div> */}
         <div style={{ borderTop: '1px solid #374151', width: 190, paddingTop: 6, fontSize: 12, marginTop: 25 }}>____________________________</div>
         <div style={{ fontWeight: 700, fontSize: 12, marginTop: 6 }}>HR – Head</div>
       </div>
-      <div style={{ borderTop: '1px solid #D1D5DB', paddingTop: 20, marginBottom: 40, fontSize: 13 }}>
+      <div className="page-break-before avoid-break" style={{ borderTop: '1px solid #D1D5DB', paddingTop: 20, marginBottom: 40, fontSize: 13 }}>
         <p style={{ margin: '0 0 10px' }}>I accept the aforesaid terms &amp; conditions and this offer of employment. I shall keep the contents of this document confidential.</p>
         <p style={{ margin: '0 0 18px' }}>I will join on {draft.joiningDate || blank(140)}.</p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
@@ -1107,7 +1138,7 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
           <div>Date:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{blank(200)}</div>
         </div>
       </div>
-      <div style={{ borderTop: '2px solid #1F2937', paddingTop: 32 }}>
+      <div className="avoid-break" style={{ borderTop: '2px solid #1F2937', paddingTop: 32 }}>
         <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 14, marginBottom: 20, letterSpacing: '0.04em' }}>Annexure</div>
  
         {isConsultant ? (
@@ -1196,11 +1227,11 @@ function OfferLetterPreview({ draft, cand, jdTitle, safeBreakup, totalMonthly, t
 
       {/* ── Footer ── */}
       <div style={{ fontSize: 10, color: TEXT_MID, padding: '0 64px 8px' }}>Confidential &amp; Proprietary Information</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 40px', fontSize: 11, color: '#1F2937' }}>
+      <div className="avoid-break" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 40px', fontSize: 11, color: '#1F2937' }}>
         <span>📍</span>
         <span>Office #501, Wing A, Orville Business Port, Viman Nagar, Lohegaon, Pune Maharashtra – 411014</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1E1B4B', color: '#fff', fontSize: 11, padding: '10px 40px' }}>
+      <div className="avoid-break" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#1E1B4B', color: '#fff', fontSize: 11, padding: '10px 40px' }}>
         <span>✉️&nbsp; info@atgeirsolutions.com</span>
         <span>🌐&nbsp; www.atgeirsolutions.com</span>
         <span>CIN: U72502PN2021PTC201427</span>

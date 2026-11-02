@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router';
 import { CheckCircle, XCircle, AlertTriangle, Star } from 'lucide-react';
+import { InterviewRound, DEFAULT_ROUNDS, normalizeRounds } from '../../services/roundConfig';
 
 const FONT = 'Inter, sans-serif';
 
@@ -33,11 +34,6 @@ const isTokenExpired = (payload: ReviewTokenPayload): boolean => {
   return Date.now() > payload.exp;
 };
 
-const ROUND_LABELS: Record<string, string> = {
-  round1:    'Round 1 (Technical)',
-  technical: 'Round 2 (Advanced Technical)',
-  hr:        'HR Round',
-};
 
 // --- CSS for Star Animations and Standard Styling (mirrors FeedbackFormPage) ---
 const formCss = `
@@ -149,12 +145,22 @@ export default function CandidateReviewPage() {
   const [submitting,  setSubmitting]  = useState(false);
   const [submitted,   setSubmitted]   = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [rounds, setRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
 
   useEffect(() => {
     if (!token) { setTokenError('invalid'); return; }
     const parsed = parseReviewToken(token);
     if (!parsed) { setTokenError('invalid'); return; }
     if (isTokenExpired(parsed)) { setTokenError('expired'); return; }
+
+    fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId: parsed.jobId }),
+    })
+      .then(r => r.json())
+      .then(d => setRounds(normalizeRounds(d.rounds)))
+      .catch(() => {});
 
     fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
       method: 'POST',
@@ -249,7 +255,7 @@ export default function CandidateReviewPage() {
     }
   };
 
-  const roundLabel = ROUND_LABELS[payload.round] ?? payload.round;
+  const roundLabel = rounds.find(r => r.id === payload.round)?.label ?? payload.round;
 
   return (
     <div style={{ minHeight: '100vh', background: '#F9FAFB', fontFamily: FONT, padding: '40px 20px', boxSizing: 'border-box' }}>

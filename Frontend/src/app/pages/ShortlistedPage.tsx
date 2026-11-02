@@ -5,11 +5,13 @@ import DashboardLayout from '../components/layout/DashboardLayout';
 import { EmailService } from '../../services/emailService';
 import { listJobs } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
+import { InterviewRound, DEFAULT_ROUNDS, normalizeRounds } from '../../services/roundConfig';
 
 const FONT = 'Inter, sans-serif';
 const DATA_MANAGER_URL = import.meta.env.VITE_DATA_MANAGER_URL;
 const GET_CANDIDATE_SLOTS_URL = import.meta.env.VITE_GET_CANDIDATE_SLOTS_URL;
 const SAVE_SLOTS_URL = import.meta.env.VITE_SAVE_SLOTS_URL;
+const CREATE_FORM_LINK_URL = import.meta.env.VITE_CREATE_FORM_LINK_URL;
 
 const AVATAR_COLORS = [
   { bg: '#FFF7ED', color: '#F07C2D' },
@@ -25,20 +27,35 @@ const makeSlotToken = (jobId: string, cand: any, round: string) => {
 };
 
 // ── Schedule Modal ─────────────────────────────────────────────────────────────
-const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess }: {
-  cand: any; jobId: string; jdTitle: string; interviewers: any[]; onClose: () => void; onSuccess: () => void;
+const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, firstRound, onClose, onSuccess }: {
+  cand: any; jobId: string; jdTitle: string; interviewers: any[]; firstRound: InterviewRound; onClose: () => void; onSuccess: () => void;
 }) => {
   const { showToast } = useToast();
   const [isSending, setIsSending] = useState(false); // <-- Add loading state
+  const [includeForm, setIncludeForm] = useState(false);
   
-  const token = useMemo(() => makeSlotToken(jobId, cand, 'round1'), [jobId, cand]);
+  const token = useMemo(() => makeSlotToken(jobId, cand, firstRound.id), [jobId, cand, firstRound.id]);
   const link  = `${window.location.origin}/schedule/${token}`;
 
-  const handleSend = async () => { // <-- Make async
+  const handleSend = async () => {
     setIsSending(true);
-    
+
     try {
-      // <-- Add await here so the UI waits for BQ to update
+      // 1. Create the candidate form link (only if the checkbox is ticked)
+      let formLink = '';
+      if (includeForm) {
+        const r = await fetch(CREATE_FORM_LINK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: jobId, candidate_id: cand.candidate_id }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.token) throw new Error(d.error || 'Could not create form link');
+        formLink = `${window.location.origin}/candidate-form/${d.token}`;
+      }
+      const jdLink = `${window.location.origin}/careers/${jobId}`;
+
+      // 2. Mark the candidate as invited
       await fetch(DATA_MANAGER_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -47,20 +64,19 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
           candidateId: cand.candidate_id,
           candidateName: cand.name,
           candidateEmail: cand.email,
-          round: 'round1',
+          round: firstRound.id,
         }),
       });
 
+      // 3. Build the email
       const htmlBody = `
         <div style="font-family:Inter,sans-serif;max-width:560px;margin:0 auto;background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
 
-          <!-- Header -->
           <div style="background:#F07C2D;padding:24px 28px;">
             <div style="font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.02em;">Atgeir Solutions</div>
             <div style="font-size:12px;color:rgba(255,255,255,0.8);margin-top:2px;">Hiring Team</div>
           </div>
 
-          <!-- Body -->
           <div style="padding:28px;">
             <p style="margin:0 0 16px;font-size:14px;color:#374151;">Dear <strong>${cand.name}</strong>,</p>
             <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
@@ -70,8 +86,14 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
               Kindly use the button below to share your availability. You may select up to <strong>three (3)</strong> preferred time slots.
             </p>
 
-            <!-- CTA Button -->
             <a href="${link}" style="display:inline-block;background:#F07C2D;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:20px;">Select Interview Slot</a>
+
+            ${includeForm ? `
+            <p style="margin:0 0 12px;font-size:14px;color:#374151;line-height:1.6;">
+              Please also review the job description and fill in a short details form.
+            </p>
+            <a href="${jdLink}" style="display:inline-block;background:#fff;color:#F07C2D;border:1px solid #F07C2D;text-decoration:none;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;margin:0 8px 20px 0;">View Job Description</a>
+            <a href="${formLink}" style="display:inline-block;background:#F07C2D;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:20px;">Fill Candidate Form</a>` : ''}
 
             <p style="margin:0;font-size:13px;color:#6B7280;line-height:1.6;">
               This link is <strong>personal</strong> — please do not share it with others.
@@ -81,7 +103,6 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
             </p>
           </div>
 
-          <!-- Support Footer -->
           <div style="padding:0 28px 20px;">
             <p style="margin:0;font-size:12px;color:#9CA3AF;border-top:1px solid #F3F4F6;padding-top:16px;">
               For any queries, contact us at
@@ -96,12 +117,11 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
       EmailService.send({ to: cand.email, subject: `Interview Invitation — ${jdTitle}`, body: htmlBody });
       navigator.clipboard.writeText(link).catch(() => {});
       showToast(`Slot invitation sent to ${cand.name}!`, 'success');
-      
-      // Trigger refresh only AFTER everything succeeds
-      onSuccess(); 
+
+      onSuccess();
     } catch (err) {
-      console.warn('MARK_INVITED failed:', err);
-      showToast('Failed to update candidate status.', 'error');
+      console.warn('Send invite failed:', err);
+      showToast(err instanceof Error ? err.message : 'Failed to update candidate status.', 'error');
     } finally {
       setIsSending(false);
     }
@@ -113,7 +133,7 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
         <div style={{ padding: '20px 24px', borderBottom: '0.5px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#111827', fontFamily: FONT }}>Schedule & Move to Pipeline</h3>
-            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · Round 1 (Technical)</p>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · {firstRound.label}</p>
           </div>
           <button onClick={onClose} disabled={isSending} style={{ background: 'none', border: 'none', fontSize: 18, cursor: isSending ? 'not-allowed' : 'pointer', color: '#9CA3AF' }}>✕</button>
         </div>
@@ -131,6 +151,15 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
               </div>
             </div>
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#374151', marginBottom: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={includeForm} onChange={e => setIncludeForm(e.target.checked)} />
+            Include job description and candidate form
+          </label>
+          {includeForm && (
+            <div style={{ marginBottom: 12, fontSize: 11, color: '#6B7280' }}>
+              The email will also contain a "View Job Description" button and a "Fill Candidate Form" button.
+            </div>
+          )}
           <div style={{ background: '#EFF6FF', border: '0.5px solid #BFDBFE', borderRadius: 8, padding: '10px 14px', fontSize: 11, color: '#1E40AF' }}>
             📎 Slot selection link will be included in the email automatically.
           </div>
@@ -156,8 +185,8 @@ const ScheduleModal = ({ cand, jobId, jdTitle, interviewers, onClose, onSuccess 
 };
 
 // ── Manual Schedule Modal ─────────────────────────────────────────────────────
-const ManualScheduleModal = ({ cand, jobId, onClose, onSuccess }: {
-  cand: any; jobId: string; onClose: () => void; onSuccess: () => void;
+const ManualScheduleModal = ({ cand, jobId, firstRound, onClose, onSuccess }: {
+  cand: any; jobId: string; firstRound: InterviewRound; onClose: () => void; onSuccess: () => void;
 }) => {
   const { showToast } = useToast();
   const [slots, setSlots] = useState<{ day: string; start_time: string; end_time: string; work_mode: string }[]>([]);
@@ -187,7 +216,7 @@ const ManualScheduleModal = ({ cand, jobId, onClose, onSuccess }: {
     fetch(GET_CANDIDATE_SLOTS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId, candidateId: cand.candidate_id, round: 'round1', mode: 'manual' }),
+      body: JSON.stringify({ jobId, candidateId: cand.candidate_id, round: firstRound.id, mode: 'manual' }),
     })
       .then(r => r.json())
       .then(data => setSlots(data.success && Array.isArray(data.slots) ? data.slots : []))
@@ -204,7 +233,7 @@ const ManualScheduleModal = ({ cand, jobId, onClose, onSuccess }: {
     const payload = {
       jobId,
       candidateId: cand.candidate_id,
-      round: 'round1',
+      round: firstRound.id,
       candidateName: cand.name,
       candidateEmail: cand.email,
       selectedSlots: [{
@@ -238,7 +267,7 @@ const ManualScheduleModal = ({ cand, jobId, onClose, onSuccess }: {
         <div style={{ padding: '20px 24px', borderBottom: '0.5px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#111827', fontFamily: FONT }}>Manual Slot Selection</h3>
-            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · Round 1 (Technical)</p>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · {firstRound.label}</p>
           </div>
           <button onClick={onClose} disabled={confirming} style={{ background: 'none', border: 'none', fontSize: 18, cursor: confirming ? 'not-allowed' : 'pointer', color: '#9CA3AF' }}>✕</button>
         </div>
@@ -319,7 +348,7 @@ function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule, onOpenM
   const initials    = candidate.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
   const score       = `${(candidate.final_score * 100).toFixed(0)}%`;
 
-  const isMoved = candidate.candidate_result === 'Interview' || candidate.candidate_result === 'Selected';
+  const isMoved = ['Interview', 'Selected', 'Hired'].includes(candidate.candidate_result);
 
   return (
     <div
@@ -333,7 +362,11 @@ function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule, onOpenM
       <div style={{ flex: 1, minWidth: 0, marginLeft: '1px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
           <span style={{ fontSize: '12px', fontWeight: 500, color: '#111827', fontFamily: FONT }}>{candidate.name}</span>
-          
+          {candidate.screening_form_submitted_at ? (
+            <span style={{ fontSize: '9px', background: '#ECFDF5', color: '#065F46', padding: '1px 6px', borderRadius: '20px', fontWeight: 500 }}>Form received</span>
+          ) : candidate.screening_form_sent_at ? (
+            <span style={{ fontSize: '9px', background: '#F3F4F6', color: '#6B7280', padding: '1px 6px', borderRadius: '20px', fontWeight: 500 }}>Form sent</span>
+          ) : null}          
           {/* Only show 'HR Shortlisted' if they haven't been moved yet. Removed AI Pass & In Pipeline */}
           {!isMoved && (
             <span style={{ fontSize: '9px', background: '#EFF6FF', color: '#1E40AF', padding: '1px 6px', borderRadius: '20px', fontWeight: 500 }}>
@@ -380,9 +413,23 @@ function CandidateRow({ candidate, rank, jobId, jdTitle, onOpenSchedule, onOpenM
             </button>
           )}
           <button
-            onClick={e => { e.stopPropagation(); onOpenManualSchedule(candidate); }}
-            title="Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response. For the standard flow, use 'Schedule & Move' instead."
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 500, fontFamily: FONT, background: '#F5F3FF', border: '0.5px solid #DDD6FE', borderRadius: '5px', color: '#7C3AED', cursor: 'pointer' }}
+            onClick={e => { e.stopPropagation(); if (isMoved) onOpenManualSchedule(candidate); }}
+            disabled={!isMoved}
+            title={
+              isMoved
+                ? "Use Manual Slot Selection only when the automated flow doesn't apply — e.g. the candidate's provided slots don't work for the interviewer, the automated invite failed to send, the candidate requested a reschedule outside the normal window, or you need to slot them in urgently without waiting for their response. For the standard flow, use 'Schedule & Move' instead."
+                : "Click 'Schedule & Move' first. Manual Slot Selection becomes available after the invite is sent."
+            }
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              padding: '4px 10px', fontSize: '10px', fontWeight: 500, fontFamily: FONT,
+              background: isMoved ? '#F5F3FF' : '#F3F4F6',
+              border: `0.5px solid ${isMoved ? '#DDD6FE' : '#E5E7EB'}`,
+              borderRadius: '5px',
+              color: isMoved ? '#7C3AED' : '#9CA3AF',
+              cursor: isMoved ? 'pointer' : 'not-allowed',
+              opacity: isMoved ? 1 : 0.7,
+            }}
           >
             <UserCog size={11} /> Manual Slot Selection
           </button>
@@ -406,7 +453,18 @@ export default function ShortlistedPage() {
   const [manualCand,   setManualCand  ] = useState<any | null>(null);
   const [refreshKey,   setRefreshKey  ] = useState(0);
   const [searchQuery,  setSearchQuery ] = useState('');
+  const [rounds, setRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
 
+  useEffect(() => {
+    if (!jobId) return;
+    fetch(DATA_MANAGER_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId }),
+    })
+      .then(r => r.json())
+      .then(d => setRounds(normalizeRounds(d.rounds)))
+      .catch(console.error);
+  }, [jobId]);
   // Load job title
   useEffect(() => {
     if (jobId && jdTitle === jobId) {
@@ -459,6 +517,7 @@ export default function ShortlistedPage() {
             jobId={jobId}
             jdTitle={jdTitle}
             interviewers={interviewers}
+            firstRound={rounds[0]}
             onClose={() => setScheduleCand(null)}
             onSuccess={() => { setScheduleCand(null); setRefreshKey(k => k + 1); }}
           />
@@ -468,6 +527,7 @@ export default function ShortlistedPage() {
           <ManualScheduleModal
             cand={manualCand}
             jobId={jobId}
+            firstRound={rounds[0]}
             onClose={() => setManualCand(null)}
             onSuccess={() => { setManualCand(null); setRefreshKey(k => k + 1); }}
           />

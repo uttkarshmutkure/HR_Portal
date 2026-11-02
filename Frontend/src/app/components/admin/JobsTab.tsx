@@ -4,7 +4,7 @@ import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
 import {
   listAdminJobs, createJob, updateJob, deleteJob, restoreJob,
-  AdminJob, JobFormInput,
+  AdminJob, JobFormInput, setReferral,
 } from '../../../services/adminJobs';
 
 const FONT = 'Inter, sans-serif';
@@ -17,6 +17,13 @@ const T = {
   red: '#DC2626', redBg: '#FEF2F2',
   gray500text: '#4B5563',
 };
+
+const WORK_TYPES: { value: string; label: string }[] = [
+  { value: 'WFO', label: 'In office' },
+  { value: 'WFH', label: 'Remote' },
+  { value: 'Hybrid', label: 'Hybrid' },
+];
+const workTypeLabel = (v?: string) => WORK_TYPES.find(w => w.value === v)?.label || v || '';
 
 function StatusBadge({ status }: { status: string }) {
   const s = (status || '').toLowerCase();
@@ -51,10 +58,12 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
   const [expMin, setExpMin] = useState(String(editingJob?.experience_min ?? ''));
   const [expMax, setExpMax] = useState(String(editingJob?.experience_max ?? ''));
   const [location, setLocation] = useState(editingJob?.location || '');
+  const [workType, setWorkType] = useState(editingJob?.work_type || '');
   const [recruiterEmail, setRecruiterEmail] = useState(editingJob?.recruiter_email || '');
   const [isSaving, setIsSaving] = useState(false);
 
   const isValid = title.trim() && description.trim() && mustHave.trim() &&
+    location.trim() && workType &&
     expMin !== '' && expMax !== '' && Number(expMin) <= Number(expMax);
 
   const handleSave = async () => {
@@ -69,6 +78,7 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
       experience_min: Number(expMin),
       experience_max: Number(expMax),
       location: location.trim(),
+      work_type: workType,
       recruiter_email: recruiterEmail.trim() || undefined,
     };
 
@@ -145,9 +155,18 @@ function JobFormModal({ editingJob, onClose, onSaved }: {
             </div>
           </div>
 
-          <div>
-            <label style={labelStyle}>Location</label>
-            <input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Pune, India / Remote" style={inputStyle} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={labelStyle}>Location <span style={{ color: T.red }}>*</span></label>
+              <input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Pune, India" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Work Type <span style={{ color: T.red }}>*</span></label>
+              <select value={workType} onChange={e => setWorkType(e.target.value)} style={{ ...inputStyle, background: '#fff', appearance: 'auto' }}>
+                <option value="">Select…</option>
+                {WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+              </select>
+            </div>
           </div>
 
           <div>
@@ -188,12 +207,14 @@ function AddJobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
   const { showToast } = useToast();
   const [jobId, setJobId] = useState('');
   const [designation, setDesignation] = useState('');
+  const [location, setLocation] = useState('');
+  const [workType, setWorkType] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const jobIdValid = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/.test(jobId.trim());
-  const isValid = jobIdValid && !!file;
+  const isValid = jobIdValid && !!file && location.trim() !== '' && workType !== '';
 
   const handleFile = (f: File | null) => {
     setError(null);
@@ -208,7 +229,7 @@ function AddJobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
     setIsSaving(true);
     setError(null);
     try {
-      await createJob(user.email, { jobId, designation, file });
+      await createJob(user.email, { jobId, designation, location, workType, file });
       showToast('Job created successfully', 'success');
       onSaved();
       onClose();
@@ -266,6 +287,31 @@ function AddJobModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
               disabled={isSaving}
               style={inputStyle}
             />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={labelStyle}>Location <span style={{ color: T.red }}>*</span></label>
+              <input
+                value={location}
+                onChange={e => setLocation(e.target.value)}
+                placeholder="e.g. Pune, India"
+                disabled={isSaving}
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Work Type <span style={{ color: T.red }}>*</span></label>
+              <select
+                value={workType}
+                onChange={e => setWorkType(e.target.value)}
+                disabled={isSaving}
+                style={{ ...inputStyle, background: '#fff', appearance: 'auto' }}
+              >
+                <option value="">Select…</option>
+                {WORK_TYPES.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+              </select>
+            </div>
           </div>
 
           <div>
@@ -360,7 +406,7 @@ export default function JobsTab() {
   const [showForm, setShowForm] = useState(false);
   const [editingJob, setEditingJob] = useState<AdminJob | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<AdminJob | null>(null);
-  const [confirmKind, setConfirmKind] = useState<'delete' | 'restore'>('delete');
+  const [confirmKind, setConfirmKind] = useState<'delete' | 'restore' | 'referral'>('delete');
   const [isProcessing, setIsProcessing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -399,6 +445,10 @@ export default function JobsTab() {
       if (confirmKind === 'restore') {
         await restoreJob(user.email, confirmTarget.job_id);
         showToast(`${confirmTarget.title} restored (set to Closed)`, 'success');
+      } else if (confirmKind === 'referral') {
+        const turningOn = !confirmTarget.referral_enabled;
+        await setReferral(user.email, confirmTarget.job_id, turningOn);
+        showToast(`Referrals ${turningOn ? 'enabled' : 'disabled'} for ${confirmTarget.title}`, 'success');
       } else {
         await deleteJob(user.email, confirmTarget.job_id);
         showToast(`${confirmTarget.title} deleted`, 'success');
@@ -409,6 +459,17 @@ export default function JobsTab() {
       showToast(err.message || 'Failed to update job', 'error');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleToggleReferral = async (j: AdminJob) => {
+    if (!user?.email) return;
+    try {
+      await setReferral(user.email, j.job_id, !j.referral_enabled);
+      showToast(`Referrals ${j.referral_enabled ? 'disabled' : 'enabled'} for ${j.title}`, 'success');
+      loadJobs();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update referrals', 'error');
     }
   };
 
@@ -431,10 +492,14 @@ export default function JobsTab() {
           message={
             confirmKind === 'restore'
               ? `Restore "${confirmTarget.title}"? It will be set to Closed, not reopened as Active.`
+              : confirmKind === 'referral'
+              ? (confirmTarget.referral_enabled
+                  ? `Turn OFF referrals for "${confirmTarget.title}"? The Refer a candidate button will be hidden for this job.`
+                  : `Turn ON referrals for "${confirmTarget.title}"? The Refer a candidate button will be shown for this job.`)
               : `Permanently delete "${confirmTarget.title}" (${confirmTarget.job_id})? This removes the job, its JD file, all its candidates and uploaded resumes. This cannot be undone.`
           }
-          confirmLabel={confirmKind === 'restore' ? 'Restore' : 'Delete'}
-          confirmColor={confirmKind === 'restore' ? T.green : T.red}
+          confirmLabel={confirmKind === 'restore' ? 'Restore' : confirmKind === 'referral' ? (confirmTarget.referral_enabled ? 'Turn Off' : 'Turn On') : 'Delete'}
+          confirmColor={confirmKind === 'restore' ? T.green : confirmKind === 'referral' ? T.orange : T.red}
           onConfirm={handleConfirmAction}
           onCancel={() => !isProcessing && setConfirmTarget(null)}
           isLoading={isProcessing}
@@ -512,7 +577,7 @@ export default function JobsTab() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: T.text }}>{j.title}</div>
                 <div style={{ fontSize: '11px', color: T.gray600, marginTop: '1px' }}>
-                  {j.job_id} {j.location && `· ${j.location}`} · {j.experience_min}–{j.experience_max} yrs
+                  {j.job_id}{j.location && ` · ${j.location}`}{j.work_type && ` · ${workTypeLabel(j.work_type)}`} · {j.experience_min}–{j.experience_max} yrs
                 </div>
               </div>
 
@@ -520,12 +585,27 @@ export default function JobsTab() {
 
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                 {!isArchived(j) && (
-                  <button
-                    onClick={() => openEditModal(j)}
-                    style={{ padding: '5px 10px', fontSize: '11px', fontWeight: 500, background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '6px', color: T.textSub, cursor: 'pointer' }}
-                  >
-                    Edit
-                  </button>
+                  <>
+                    <button
+                      onClick={() => { setConfirmKind('referral'); setConfirmTarget(j); }}
+                      title="Show or hide the Refer a candidate button for this job"
+                      style={{
+                        padding: '5px 10px', fontSize: '11px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer',
+                        background: j.referral_enabled ? T.greenBg : T.gray50,
+                        color: j.referral_enabled ? T.greenText : T.gray600,
+                        border: `0.5px solid ${j.referral_enabled ? '#6EE7B7' : T.gray200}`,
+                      }}
+                    >
+                      Referrals: {j.referral_enabled ? 'On' : 'Off'}
+                    </button>
+
+                    <button
+                      onClick={() => openEditModal(j)}
+                      style={{ padding: '5px 10px', fontSize: '11px', fontWeight: 500, background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '6px', color: T.textSub, cursor: 'pointer' }}
+                    >
+                      Edit
+                    </button>
+                  </>
                 )}
                 {isArchived(j) && (
                   <button

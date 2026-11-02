@@ -111,9 +111,38 @@ def generate_questions(request):
         job_id       = req_json.get('jobId')
         candidate_id = req_json.get('candidateId')
         round_name   = req_json.get('round', 'round1')
+        round_kind   = req_json.get('roundKind') or ('hr' if round_name == 'hr' else 'technical')
+        # which technical level? use position of the round (0 = first)
+        round_index  = int(req_json.get('roundIndex', 0))
 
         # ─── 3. FETCH CONTEXT FROM BIGQUERY ───────────────────────────────────
+        # HR clicked "Regenerate" -> skip the saved copy and generate fresh
+        force        = bool(req_json.get('force', False))
 
+        # ─── 2b. RETURN SAVED QUESTIONS (unless Regenerate was clicked) ───────
+        if not force:
+            try:
+                saved_rows = list(bq_client.query(
+                    f"SELECT questions FROM `{project_id}.{dataset_id}.interview_round_questions` "
+                    f"WHERE candidate_id = @cand_id AND job_id = @job_id AND round = @round LIMIT 1",
+                    job_config=bigquery.QueryJobConfig(query_parameters=[
+                        bigquery.ScalarQueryParameter("cand_id", "STRING", candidate_id),
+                        bigquery.ScalarQueryParameter("job_id",  "STRING", job_id),
+                        bigquery.ScalarQueryParameter("round",   "STRING", round_name),
+                    ])
+                ))
+                if saved_rows and saved_rows[0].questions:
+                    saved = json.loads(saved_rows[0].questions)
+                    if saved.get("theory_questions") or saved.get("coding_questions"):
+                        return (json.dumps({
+                            "success":          True,
+                            "theory_questions": saved.get("theory_questions", []),
+                            "coding_questions": saved.get("coding_questions", []),
+                            "cached":           True,
+                        }), 200, headers)
+            except Exception as e:
+                print(f"Saved-questions lookup failed, generating fresh: {e}")
+                
         job_rows = list(bq_client.query(
             f"SELECT title, description, must_have_skills FROM `{project_id}.{dataset_id}.jobs` "
             f"WHERE job_id = '{job_id}' LIMIT 1"
@@ -132,7 +161,7 @@ def generate_questions(request):
 
         history_context_text = "No previous round data available."
 
-        if round_name in ['technical', 'hr']:
+        if round_index > 0:
             history_query = f"""
                 SELECT f.round, f.notes, q.questions
                 FROM `{project_id}.{dataset_id}.interview_feedback` f
@@ -152,7 +181,7 @@ def generate_questions(request):
 
         # ─── 4. SEPARATE SCHEMAS FOR PARALLEL CALLS ───────────────────────────
 
-        is_hr = round_name == 'hr'
+        is_hr = round_kind == 'hr'
 
         # ─── 5. BUILD PROMPT ───────────────────────────────────────────────────
 
@@ -195,11 +224,11 @@ def generate_questions(request):
         else:
             # Parallel: theory call + coding call simultaneously
             THEORY_INSTR = (
-                TECHNICAL_INSTRUCTIONS if round_name == 'technical' else ROUND1_INSTRUCTIONS
+                (TECHNICAL_INSTRUCTIONS if round_index > 0 else ROUND1_INSTRUCTIONS)
             ) + "\n\nGenerate ONLY the theory_questions section. Do NOT generate coding questions."
 
             CODING_INSTR = (
-                TECHNICAL_INSTRUCTIONS if round_name == 'technical' else ROUND1_INSTRUCTIONS
+                (TECHNICAL_INSTRUCTIONS if round_index > 0 else ROUND1_INSTRUCTIONS)
             ) + "\n\nGenerate ONLY the coding_questions section. Do NOT generate theory questions."
 
             with ThreadPoolExecutor(max_workers=2) as ex:

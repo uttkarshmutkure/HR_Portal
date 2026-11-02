@@ -11,10 +11,12 @@ import { TopCandidate } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
 import { useAuth } from '../components/AuthContext';
 import { SalaryRules, DEFAULT_SALARY_RULES, GenerateChoiceModal, SalaryDetailsModal } from './OfferGenerationPage';
+import { InterviewRound, DEFAULT_ROUNDS, normalizeRounds, roundIndex } from '../../services/roundConfig';
 
 const GET_CANDIDATE_SLOTS_URL = import.meta.env.VITE_GET_CANDIDATE_SLOTS_URL;
 const SAVE_SLOTS_URL = import.meta.env.VITE_SAVE_SLOTS_URL;
 const OFFER_AGENT_URL = import.meta.env.VITE_OFFER_AGENT_URL;
+const PREBOARDING_URL = import.meta.env.VITE_PREBOARDING_URL;
 // ── Shared Interviewer Store ───────────────────────────────────────────────────
 const InterviewerHelper = {
   get: (jobId: string) => {
@@ -26,8 +28,8 @@ const InterviewerHelper = {
   }
 };
 
-type RoundTab  = 'round1' | 'round2' | 'hrround' | 'onboarding' | 'hired' | 'archived';
-type DetailTab = 'pipeline' | 'feedback' | 'profile' | 'questions' | 'offer';
+type RoundTab  = string;   // a round id, or 'onboarding' | 'hired' | 'archived'
+type DetailTab = 'pipeline' | 'feedback' | 'profile' | 'questions' | 'offer' | 'documents';
 
 // ── Status badge helper (legacy local-storage fallback, BQ is source of truth) ─
 const getCandidateStatus = (jobId: string, candId: string): string => {
@@ -159,6 +161,60 @@ const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
   'Awaiting Feedback':            { bg: '#FFF7ED', color: '#EA580C' },
   'Awaiting R2 Slot Selection':   { bg: '#FEF9C3', color: '#B45309' },
   'Awaiting HR Slot Selection':   { bg: '#FEF9C3', color: '#B45309' },
+};
+
+// ── Dynamic status helpers (replace the fixed R1/R2/HR logic) ─────────────────
+const normS = (s?: string | null) => String(s || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+const resolveStatusDynamic = (
+  rounds: InterviewRound[], timeline: any[],
+  hasFeedback: (id: string) => boolean,
+  getVerdict: (id: string) => string | null,
+): [string, string | null] => {
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    const r = rounds[i];
+    const entry = timeline.find((t: any) => normS(t.round) === r.id);
+    const st = normS(entry?.status);
+    if (!entry || !st || st === 'not_started') continue;
+
+    const next = rounds[i + 1];
+    const nextWait  = next ? `Awaiting ${next.short} Slot Selection` : 'Offer Stage';
+    const received  = `${r.short} Feedback Received`;
+    const scheduled = `${r.short} Interview Scheduled`;
+
+    if (st === 'rejected') return ['Rejected', null];
+    if (st === 'on_hold')  return [received, 'On Hold'];
+    if (st === 'advanced') return next ? [received, nextWait] : ['Offer Stage', null];
+    if (st === 'feedback_submitted') {
+      if (!hasFeedback(r.id)) return [scheduled, 'Awaiting Feedback'];
+      return normS(getVerdict(r.id)) === 'reject' ? [received, 'Rejected'] : [received, nextWait];
+    }
+    if (st === 'scheduled') return [scheduled, 'Awaiting Feedback'];
+    if (st === 'invited' || st === 'confirmed') return ['Awaiting Candidate Response', null];
+  }
+  return ['Shortlisted', null];
+};
+
+const statusStyle = (label: string): { bg: string; color: string } => {
+  if (label === 'Rejected')                  return { bg: '#FEF2F2', color: '#DC2626' };
+  if (label === 'Hired')                     return { bg: '#DCFCE7', color: '#15803D' };
+  if (label === 'Offer Stage')               return { bg: '#ECFDF5', color: '#059669' };
+  if (label.endsWith('Interview Scheduled')) return { bg: '#DCFCE7', color: '#16A34A' };
+  if (label.endsWith('Feedback Received'))   return { bg: '#EFF6FF', color: '#2563EB' };
+  if (label === 'On Hold')                   return { bg: '#EFF6FF', color: '#3B82F6' };
+  if (label === 'Awaiting Feedback')         return { bg: '#FFF7ED', color: '#EA580C' };
+  if (label.startsWith('Awaiting'))          return { bg: '#FEF9C3', color: '#B45309' };
+  return { bg: '#F3F4F6', color: '#4B5563' };
+};
+
+type DocState = { status: 'missing'|'uploaded'|'verified'|'rejected'; reason: string|null; uploaded_at: string|null };
+type PreboardingRec = { candidate_id: string; status: string; deadline: string; documents: { aadhaar: DocState; pan: DocState } };
+const PREBOARD_BADGE: Record<string, { label: string; bg: string; color: string }> = {
+  docs_pending:   { label: 'Docs Pending',   bg: '#FEF9C3', color: '#B45309' },
+  docs_submitted: { label: 'Docs Submitted', bg: '#EFF6FF', color: '#2563EB' },
+  docs_verified:  { label: 'Docs Verified',  bg: '#DCFCE7', color: '#15803D' },
+  docs_rejected:  { label: 'Docs Rejected',  bg: '#FEF2F2', color: '#DC2626' },
+  overdue:        { label: 'Overdue',        bg: '#FEF2F2', color: '#DC2626' },
 };
 
 const pipelineCache: Record<string, any[]> = {};
@@ -348,6 +404,87 @@ const ManualScheduleModal = ({ cand, jobId, round, roundLabel, onClose, onSucces
   );
 };
 
+
+function DocumentsPanel({ cand, jdTitle, jobId, rec, call, onChanged, showToast }: any) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const base = { candidate_id: cand.candidate_id, job_id: jobId };
+
+  const run = async (key: string, body: any, okMsg: string) => {
+    setBusy(key);
+    try {
+      const d = await call({ ...base, ...body });
+      if (!d.success) throw new Error(d.message);
+      showToast(okMsg, 'success'); onChanged();
+    } catch (e: any) { showToast(e.message || 'Action failed', 'error'); }
+    finally { setBusy(null); }
+  };
+
+  const view = async (t: string) => {
+    const d = await call({ ...base, action: 'get_document', doc_type: t });
+    if (!d.success) return showToast(d.message, 'error');
+    const bytes = Uint8Array.from(atob(d.data), c => c.charCodeAt(0));
+    window.open(URL.createObjectURL(new Blob([bytes], { type: d.mime })), '_blank');
+  };
+
+  const reject = (t: string, label: string) => {
+    if (!window.confirm(`Reject ${label}? The candidate will be emailed to re-upload.`)) return;
+    const reason = window.prompt(`Reason for rejecting ${label}?`)?.trim();
+    if (reason) run(`reject-${t}`, { action: 'reject', doc_type: t, reason }, `${label} rejected, candidate notified`);
+  };
+
+  if (!rec) return (
+    <div style={{ textAlign: 'center', padding: '24px 0', fontSize: 12, color: '#6B7280' }}>
+      No preboarding record yet.
+      <div style={{ marginTop: 12 }}>
+        <button className="btn-sm primary" disabled={busy === 'create'}
+          onClick={() => run('create', { action: 'create', candidate_name: cand.name,
+            candidate_email: cand.email, job_title: jdTitle }, 'Link sent to candidate')}>
+          Start Preboarding &amp; Email Link
+        </button>
+      </div>
+    </div>
+  );
+
+  const DOCS: [string, string][] = [['aadhaar', 'Aadhaar Card'], ['pan', 'PAN Card']];
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+        Deadline: <strong>{new Date(rec.deadline).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</strong>
+      </div>
+      {DOCS.map(([t, label]) => {
+        const d = rec.documents[t];
+        return (
+          <div key={t} className="fb-card">
+            <div className="fb-card-head">
+              <span className="fb-round-label">{label}</span>
+              <span style={{ fontSize: 10, fontWeight: 600 }}>{d.status.toUpperCase()}</span>
+            </div>
+            {d.reason && <div className="fb-notes" style={{ color: '#DC2626' }}>Rejected: {d.reason}</div>}
+            {d.status !== 'missing' && (
+              <div className="row-acts" style={{ marginTop: 8 }}>
+                <button className="btn-sm" onClick={() => view(t)}>View</button>
+                {d.status === 'uploaded' && (
+                  <button className="btn-sm success" disabled={busy === `verify-${t}`}
+                    onClick={() => run(`verify-${t}`, { action: 'verify', doc_type: t }, `${label} verified`)}>Verify</button>
+                )}
+                {(d.status === 'uploaded' || d.status === 'verified') && (
+                  <button className="btn-sm danger" onClick={() => reject(t, label)}>Reject</button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="row-acts" style={{ marginTop: 12 }}>
+        <button className="btn-sm" disabled={busy === 'resend'}
+          onClick={() => run('resend', { action: 'resend' }, 'Link re-sent')}>Resend Link</button>
+        <button className="btn-sm" disabled={busy === 'extend'}
+          onClick={() => run('extend', { action: 'extend', days: 3 }, 'Deadline extended by 3 days')}>Extend +3 days</button>
+      </div>
+    </div>
+  );
+}
+
 export default function InterviewPipelinePage() {
   const { showToast } = useToast();
   const { user, activeRole } = useAuth();
@@ -377,6 +514,8 @@ export default function InterviewPipelinePage() {
   const [pendingOfferTarget, setPendingOfferTarget] = useState<{ cand: TopCandidate; jdTitle: string } | null>(null);
   const [hireTarget, setHireTarget] = useState<TopCandidate | null>(null);
   const [isHiring, setIsHiring] = useState(false);
+  const [docsEmailTarget, setDocsEmailTarget] = useState<TopCandidate | null>(null);
+  const [isSendingDocs, setIsSendingDocs] = useState(false);
   // ── Live BigQuery profile data ─────────────────────────────────────────────
   const [feedbackData, setFeedbackData] = useState<{ timeline: any[]; feedback: any[] } | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -392,7 +531,51 @@ export default function InterviewPipelinePage() {
   const [candidateInterviewers, setCandidateInterviewers] = useState<Record<string, Record<string, string | null>>>({});
   const [manualCand, setManualCand] = useState<any | null>(null);
   const [offerStatuses, setOfferStatuses] = useState<Record<string, string>>({});
+  const [preboarding, setPreboarding] = useState<Record<string, PreboardingRec>>({});
 
+  // ── This job's interview rounds (set by HR in Hiring Setup) ────────────────
+  const [jobRounds, setJobRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
+  const [roundsLoaded, setRoundsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!jobId) return;
+    fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        const loaded = normalizeRounds(d.rounds);
+        setJobRounds(prev => JSON.stringify(prev) === JSON.stringify(loaded) ? prev : loaded);
+      })
+      .catch(console.error)
+      .finally(() => setRoundsLoaded(true));
+  }, [jobId, refreshKey]);
+
+  // If the saved tab doesn't exist for this job, fall back to the first round
+  useEffect(() => {
+    if (!roundsLoaded) return;
+    const valid = [...jobRounds.map(r => r.id), 'onboarding', 'hired', 'archived'];
+    if (!valid.includes(activeTab)) setActiveTab(jobRounds[0].id);
+  }, [roundsLoaded, jobRounds]);
+
+const pbCall = (body: any) =>
+  fetch(PREBOARDING_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.json());
+const docsVerified = (id: string) => preboarding[id]?.status === 'docs_verified';
+const offerAccepted = (id: string) => offerStatuses[id] === 'accepted' || docsVerified(id);
+const hiredBlockedReason = (id: string) => docsVerified(id) ? undefined : 'Both Aadhaar and PAN must be verified first';
+const docsActionLabel = (id: string) => {
+  const s = preboarding[id]?.status;
+  if (!s)                     return 'Set Up Documents';
+  if (s === 'docs_submitted') return 'Review Documents';
+  if (s === 'docs_rejected')  return 'Awaiting Re-upload';
+  if (s === 'overdue')        return 'Documents Overdue';
+  return 'Awaiting Documents';          // docs_pending
+};
+const openDocuments = (id: string) => { setSelectedCandId(id); setDetailTab('documents'); };
+const hasOfferSent = (id: string) => { const s = offerStatuses[id]; return !offerAccepted(id) && !!s && s !== 'rejected'; };
   // Only reset detailTab when activeTab changes, not when detailTab itself changes.
   // Having detailTab in the dep array caused a loop: clicking Pipeline tab on onboarding
   // would immediately get overridden back to 'offer'.
@@ -408,7 +591,7 @@ export default function InterviewPipelinePage() {
   useEffect(() => {
     if (!jobId) return;
 
-    if (refreshKey === 0 && pipelineCache[jobId]) {
+    if (refreshKey === 0 && pipelineCache[jobId]?.length) {
       setPipelineCandidates(pipelineCache[jobId]);
       return;
     }
@@ -416,7 +599,7 @@ export default function InterviewPipelinePage() {
     fetch(import.meta.env.VITE_DATA_MANAGER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'GET_SHORTLISTED', jobId }),
+      body: JSON.stringify({ type: 'GET_SHORTLISTED', jobId, forPipeline: true }),
     })
       .then(res => res.json())
       .then(data => {
@@ -449,8 +632,19 @@ export default function InterviewPipelinePage() {
       .catch(console.error);
   }, [jobId, refreshKey]);
 
+  const loadPreboarding = () => {
+    if (!jobId || !PREBOARDING_URL || activeRole !== 'hr') return;
+    pbCall({ action: 'list', job_id: jobId }).then(d => {
+      if (!d.success) return;
+      const map: Record<string, PreboardingRec> = {};
+      d.records.forEach((r: PreboardingRec) => { map[r.candidate_id] = r; });
+      setPreboarding(map);
+    }).catch(console.error);
+  };
+  useEffect(() => { loadPreboarding(); }, [jobId, refreshKey, activeRole]);
+
   useEffect(() => {
-    if (!jobId || pipelineCandidates.length === 0) return;
+    if (!jobId || pipelineCandidates.length === 0 || !roundsLoaded) return;
 
     if (refreshKey === 0 && roundsCache[jobId] && statusesCache[jobId] && interviewersCache[jobId]) {
       setCandidateRounds(roundsCache[jobId]);
@@ -482,15 +676,11 @@ export default function InterviewPipelinePage() {
 
             const normStr = (s?: string | null) => String(s || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
             
-            const hr = timeline.find((t: any) => normStr(t.round) === 'hr');
-            const r2 = timeline.find((t: any) => normStr(t.round) === 'technical');
-            const r1 = timeline.find((t: any) => normStr(t.round) === 'round1');
+            const entryFor = (id: string) => timeline.find((t: any) => normStr(t.round) === id);
 
-            interviewers[candId] = {
-              round1:    r1?.interviewer_email ?? null,
-              technical: r2?.interviewer_email ?? null,
-              hr:        hr?.interviewer_email ?? null,
-            };
+            interviewers[candId] = Object.fromEntries(
+              jobRounds.map(r => [r.id, entryFor(r.id)?.interviewer_email ?? null])
+            );
 
             const hasFeedback  = (round: string) => feedback.some((fb: any) => normStr(fb.round) === round);
             const hasRejection = (round: string) => feedback.some((fb: any) => normStr(fb.round) === round && normStr(fb.verdict) === 'reject');
@@ -499,15 +689,20 @@ export default function InterviewPipelinePage() {
               return fb?.verdict ?? null;
             };
 
-            statuses[candId] = resolveBQStatus(r1, r2, hr, hasFeedback, hasRejection, getVerdict);
+            statuses[candId] = resolveStatusDynamic(jobRounds, timeline, hasFeedback, getVerdict);
 
-            // 1. Check if the candidate has passed the round (either marked 'advanced' OR has a passing feedback verdict)
-            const r1Pass = normStr(r1?.status) === 'advanced' || (normStr(r1?.status) === 'feedback_submitted' && normStr(getVerdict('round1')) === 'advance');
-            const r2Pass = normStr(r2?.status) === 'advanced' || (normStr(r2?.status) === 'feedback_submitted' && normStr(getVerdict('technical')) === 'advance');
-            const hrPass = normStr(hr?.status) === 'advanced' || (normStr(hr?.status) === 'feedback_submitted' && normStr(getVerdict('hr')) === 'advance');
+            const passedRound = (id: string) => {
+              const e = entryFor(id);
+              return normStr(e?.status) === 'advanced' ||
+                (normStr(e?.status) === 'feedback_submitted' && normStr(getVerdict(id)) === 'advance');
+            };
+
+            const lastId    = jobRounds[jobRounds.length - 1].id;
             const topResult = normStr(candidate.candidate_result);
-            const isGloballyRejected = topResult === 'rejected' || normStr(r1?.status) === 'rejected' || normStr(r2?.status) === 'rejected' || normStr(hr?.status) === 'rejected' || hasRejection('round1') || hasRejection('technical') || hasRejection('hr');
-            const isGloballyHired    = topResult === 'hired'    || normStr(hr?.status) === 'hired'    || normStr(hr?.status) === 'accepted';
+            const isGloballyRejected = topResult === 'rejected' ||
+              jobRounds.some(r => normStr(entryFor(r.id)?.status) === 'rejected' || hasRejection(r.id));
+            const isGloballyHired = topResult === 'hired' ||
+              ['hired', 'accepted'].includes(normStr(entryFor(lastId)?.status));
 
             if (isGloballyRejected) {
               rounds[candId]   = 'archived';
@@ -515,17 +710,16 @@ export default function InterviewPipelinePage() {
             } else if (isGloballyHired) {
               rounds[candId]   = 'hired';
               statuses[candId] = ['Hired', null];
-            } else if (hrPass) {
-              rounds[candId] = 'onboarding';
-            } else if (hr || r2Pass) {
-              rounds[candId] = 'hrround';
-            } else if (r2 || r1Pass) {
-              rounds[candId] = 'round2';
             } else {
-              rounds[candId] = 'round1';
+              // furthest round with any activity; if it was passed, move on to the next one
+              let idx = 0;
+              for (let i = jobRounds.length - 1; i >= 0; i--) {
+                if (entryFor(jobRounds[i].id)) { idx = passedRound(jobRounds[i].id) ? i + 1 : i; break; }
+              }
+              rounds[candId] = idx >= jobRounds.length ? 'onboarding' : jobRounds[idx].id;
             }
           } catch {
-            rounds[candId]   = 'round1';
+            rounds[candId]   = jobRounds[0].id;
             statuses[candId] = ['Shortlisted', null];
           }
         })
@@ -540,20 +734,19 @@ export default function InterviewPipelinePage() {
     };
 
     fetchRounds();
-    }, [jobId, refreshKey, pipelineCandidates, offerStatuses]);
+    }, [jobId, refreshKey, pipelineCandidates, offerStatuses, jobRounds, roundsLoaded]);
 
   // HR sees everyone. An Interviewer only sees a candidate in a given tab if they
   // are the assigned interviewer for that round (or, for Hired/Archived, if they
   // interviewed the candidate in ANY round along the way).
-  const bucketRoundKey: Record<RoundTab, string> = {
-    round1: 'round1', round2: 'technical', hrround: 'hr',
-    onboarding: 'hr', hired: 'hr', archived: 'hr',
-  };
+  // round tabs use their own id; onboarding / hired / archived map to the LAST round
+  const roundKeyForTab = (tab: RoundTab): string =>
+    ['onboarding', 'hired', 'archived'].includes(tab) ? jobRounds[jobRounds.length - 1].id : tab;
 
   // ── Feedback visibility cascade ─────────────────────────────────────────
   // Interviewer sees feedback up to (and including) the highest round they're
   // assigned to for this candidate. HR sees everything, unfiltered.
-  const ROUND_ORDER: Record<string, number> = { round1: 1, technical: 2, hr: 3 };
+  const ROUND_ORDER: Record<string, number> = Object.fromEntries(jobRounds.map((r, i) => [r.id, i + 1]));
 
   const getVisibleFeedback = (candId: string, allFeedback: any[]): any[] => {
     if (activeRole !== 'interviewer') return allFeedback;
@@ -584,17 +777,17 @@ export default function InterviewPipelinePage() {
       return Object.values(perRound).some(email => email === user.email);
     }
 
-    return perRound[bucketRoundKey[bucket]] === user.email;
+    return perRound[roundKeyForTab(bucket)] === user.email;
   };
 
-  const candidatesByRound: Record<RoundTab, TopCandidate[]> = {
-    round1: [], round2: [], hrround: [], onboarding: [], hired: [], archived: []
-  };
+  const candidatesByRound: Record<string, TopCandidate[]> = Object.fromEntries(
+    [...jobRounds.map(r => r.id), 'onboarding', 'hired', 'archived'].map(k => [k, [] as TopCandidate[]])
+  );
 
   pipelineCandidates.forEach(candidate => {
     const candId = candidate.candidate_id;
-    const tab = candidateRounds[candId] ?? 'round1';
-    if (isVisibleToCurrentUser(candId, tab)) {
+    const tab = candidateRounds[candId] ?? jobRounds[0].id;
+    if (candidatesByRound[tab] && isVisibleToCurrentUser(candId, tab)) {
       candidatesByRound[tab].push(candidate);
     }
   });
@@ -604,18 +797,22 @@ export default function InterviewPipelinePage() {
   const [loadingKeys,   setLoadingKeys]   = useState<Set<string>>(new Set());
   const [cacheVersion,  setCacheVersion]  = useState(0); // bump to force re-render after module cache writes
 
-  const roundMap: Record<RoundTab, string> = {
-    round1: 'round1', round2: 'technical', hrround: 'hr', onboarding: 'hr', hired: 'hr', archived: 'hr'
+  const lastRoundId = jobRounds[jobRounds.length - 1].id;
+  const roundMap: Record<string, string> = {
+    ...Object.fromEntries(jobRounds.map(r => [r.id, r.id])),
+    onboarding: lastRoundId, hired: lastRoundId, archived: lastRoundId,
   };
+  const activeRoundCfg = jobRounds.find(r => r.id === roundMap[activeTab]);
+  const activeRoundIdx = roundIndex(jobRounds, roundMap[activeTab]);
   const questionsCacheKey = selectedCandId ? `${selectedCandId}:${roundMap[activeTab]}` : null;
   const cachedQs          = questionsCacheKey ? questionsCacheStore.get(questionsCacheKey) : undefined;
   const theoryQuestions   = cachedQs?.theory ?? [];
   const codingQuestions   = cachedQs?.coding  ?? [];
   const hasQuestions      = theoryQuestions.length > 0 || codingQuestions.length > 0;
-  const isHrTab           = activeTab === 'hrround' || activeTab === 'onboarding';
+  const isHrTab           = activeRoundCfg?.kind === 'hr';
   const questionsLoading  = !!questionsCacheKey && loadingKeys.has(questionsCacheKey);
 
-  const generateQuestions = async () => {
+  const generateQuestions = async (force: boolean = false) => {
     if (!jobId || !selectedCandId || !questionsCacheKey) return;
     const key = questionsCacheKey;
     setLoadingKeys(prev => new Set(prev).add(key));
@@ -623,7 +820,12 @@ export default function InterviewPipelinePage() {
     try {
       const res  = await fetch(import.meta.env.VITE_GENERATE_QUESTIONS_URL, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, candidateId: selectedCandId, round: roundMap[activeTab] }),
+        body: JSON.stringify({
+          jobId, candidateId: selectedCandId, round: roundMap[activeTab],
+          roundKind: activeRoundCfg?.kind ?? 'technical',
+          roundIndex: activeRoundIdx < 0 ? 0 : activeRoundIdx,
+          force,
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -662,13 +864,13 @@ export default function InterviewPipelinePage() {
     const candidate = pipelineCandidates.find(c => c.candidate_id === urlCandidateId);
     if (!candidate) return;
     setSelectedCandId(candidate.candidate_id);
-    const round = candidateRounds[candidate.candidate_id] ?? 'round1';
+    const round = candidateRounds[candidate.candidate_id] ?? jobRounds[0].id;
     setActiveTab(round);
     if (autoFeedback === 'true') setFeedbackModalCand(candidate);
   }, [urlCandidateId, autoFeedback, jobId]);
 
   useEffect(() => {
-    const list = candidatesByRound[activeTab];
+    const list = candidatesByRound[activeTab] ?? [];
     if (list.length === 0) {
       setSelectedCandId(null);
       return;
@@ -712,7 +914,7 @@ export default function InterviewPipelinePage() {
       .finally(() => setProfileLoading(false));
   }, [selectedCandId, jobId, refreshKey]);
 
-  const activeCandidates  = candidatesByRound[activeTab];
+  const activeCandidates  = candidatesByRound[activeTab] ?? [];
   const selectedCandidate = activeCandidates.find(c => c.candidate_id === selectedCandId) || null;
 
   const handleReject = async (cand: TopCandidate, e?: React.MouseEvent) => {
@@ -732,6 +934,7 @@ export default function InterviewPipelinePage() {
 
   const handleMoveToHired = (cand: TopCandidate, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (!docsVerified(cand.candidate_id)) { showToast(hiredBlockedReason(cand.candidate_id)!, 'error'); return; }
     setHireTarget(cand);
   };
 
@@ -739,21 +942,41 @@ export default function InterviewPipelinePage() {
     if (!hireTarget || !jobId) return;
     setIsHiring(true);
     try {
-      await fetch(import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL, {
+      const res = await fetch(import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidate_id: hireTarget.candidate_id, candidate_result: 'Hired' }),
+        body: JSON.stringify({ candidate_id: hireTarget.candidate_id, job_id: jobId, candidate_result: 'Hired' }),
       });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || 'Rejected by server');
       showToast(`${hireTarget.name} moved to Hired`, 'success');
       setHireTarget(null);
       refresh();
-    } catch (err) {
-      console.error('Failed to move candidate to Hired', err);
-      showToast('Failed to move candidate to Hired.', 'error');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to move candidate to Hired.', 'error');
     } finally {
       setIsHiring(false);
     }
   };
+
+  const doSendDocsEmail = async () => {
+    if (!docsEmailTarget || !jobId) return;
+    setIsSendingDocs(true);
+    try {
+      const d = await pbCall({
+        action: 'create', candidate_id: docsEmailTarget.candidate_id, job_id: jobId,
+        candidate_name: docsEmailTarget.name, candidate_email: docsEmailTarget.email, job_title: jdTitle,
+      });
+      if (!d.success) throw new Error(d.message);
+      showToast(`Documentation email sent to ${docsEmailTarget.name}`, 'success');
+      setDocsEmailTarget(null);
+      loadPreboarding();
+    } catch (e: any) {
+      showToast(e.message || 'Failed to send documentation email', 'error');
+    } finally {
+      setIsSendingDocs(false);
+    }
+  };
+
   const goToOfferCopilot = (rulesOverride?: SalaryRules) => {
     if (!pendingOfferTarget) return;
     navigate(`/jobs/${jobId}/candidates/${pendingOfferTarget.cand.candidate_id}/offer`, {
@@ -1141,39 +1364,35 @@ export default function InterviewPipelinePage() {
   // ── Live Timeline from BigQuery ────────────────────────────────────────────
   const renderLiveTimeline = (round: RoundTab) => {
     const tl = feedbackData?.timeline ?? [];
+    const offerRejected = offerStatuses[selectedCandidate?.candidate_id ?? ''] === 'rejected';
 
     const getRoundStatus = (roundId: string) => {
       const entry = tl.find((t: any) => t.round?.toLowerCase().trim() === roundId);
       return entry?.status?.toLowerCase().trim() ?? null;
     };
 
-    const r1Status = getRoundStatus('round1');
-    const r2Status = getRoundStatus('technical');
-    const hrStatus = getRoundStatus('hr');
+    const roundSteps = jobRounds.map((r) => {
+      const s = getRoundStatus(r.id);
+      return {
+        label:  r.label,
+        sub:    s ? `Status: ${s}` : (round === r.id ? 'Currently in this stage' : 'Pending'),
+        done:   !!s && !['invited', 'scheduled', 'confirmed', 'rejected'].includes(s),
+        active: round === r.id && (!s || s === 'scheduled' || s === 'confirmed'),
+        failed: s === 'rejected',
+      };
+    });
 
     const timelineSteps = [
-      { label: 'AI Screening Passed',  sub: `AI Score: ${Math.round((selectedCandidate?.final_score ?? 0) * 100)}/100`, done: true,    active: false, failed: false },
-      { label: 'HR Shortlisted',       sub: 'Moved to interview pipeline',                                              done: true,    active: false, failed: false },
-      { label: 'Round 1 — Technical',
-        sub:    r1Status ? `Status: ${r1Status}` : (round === 'round1' ? 'Currently in this stage' : 'Pending'),
-        done:   !!r1Status && !['invited', 'scheduled', 'confirmed', 'rejected'].includes(r1Status),
-        active: round === 'round1' && (!r1Status || r1Status === 'scheduled' || r1Status === 'confirmed'),
-        failed: r1Status === 'rejected' }, // <-- Added failed logic
-      { label: 'Round 2 — Advanced',
-        sub:    r2Status ? `Status: ${r2Status}` : (round === 'round2' ? 'Currently in this stage' : 'Pending'),
-        done:   !!r2Status && !['invited', 'scheduled', 'confirmed', 'rejected'].includes(r2Status),
-        active: round === 'round2' && (!r2Status || r2Status === 'scheduled' || r2Status === 'confirmed'),
-        failed: r2Status === 'rejected' }, // <-- Added failed logic
-      { label: 'HR Round',
-        sub:    hrStatus ? `Status: ${hrStatus}` : (round === 'hrround' ? 'Currently in this stage' : 'Pending'),
-        done:   !!hrStatus && !['invited', 'scheduled', 'confirmed', 'rejected'].includes(hrStatus),
-        active: round === 'hrround' && (!hrStatus || hrStatus === 'scheduled' || hrStatus === 'confirmed'),
-        failed: hrStatus === 'rejected' }, // <-- Added failed logic
-      { label: 'Onboarding',
-        sub:    round === 'hired' ? 'Completed — Candidate hired' : (round === 'onboarding' ? 'Currently in this stage' : 'Pending'),
-        done:   round === 'hired',
-        active: round === 'onboarding',
-        failed: false },
+      { label: 'AI Screening Passed',  sub: `AI Score: ${Math.round((selectedCandidate?.final_score ?? 0) * 100)}/100`, done: true, active: false, failed: false },
+      { label: 'HR Shortlisted',       sub: 'Moved to interview pipeline',                                              done: true, active: false, failed: false },
+      ...roundSteps,
+      { label: 'Preboarding',
+        sub:    offerRejected ? 'Offer rejected by candidate'
+              : round === 'hired' ? 'Completed — Candidate hired'
+              : (round === 'onboarding' ? 'Currently in this stage' : 'Pending'),
+        done:   !offerRejected && round === 'hired',
+        active: !offerRejected && round === 'onboarding',
+        failed: offerRejected },
       { label: 'Hired',
         sub:    round === 'hired' ? 'Offer accepted and process complete' : 'Pending',
         done:   round === 'hired',
@@ -1213,8 +1432,8 @@ export default function InterviewPipelinePage() {
       : [];
     
     // 1. Resolve current round ID and human-readable label
-    const currentRoundId = activeTab === 'round1' ? 'round1' : activeTab === 'round2' ? 'technical' : 'hr';
-    const roundName = activeTab === 'round1' ? 'Round 1 (Technical)' : activeTab === 'round2' ? 'Round 2 (Advanced Technical)' : 'HR Round';
+    const currentRoundId = roundKeyForTab(activeTab);
+    const roundName = jobRounds.find(r => r.id === currentRoundId)?.label ?? '';
     
     const norm = (s?: string | null) => String(s || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
     const roundTimeline = (feedbackData?.timeline ?? []).find((t: any) => norm(t.round) === currentRoundId);
@@ -1239,7 +1458,7 @@ export default function InterviewPipelinePage() {
     })() : '';
 
     const ROUND_LABELS: Record<string, string> = {
-      round1: 'Round 1', technical: 'Round 2', hr: 'HR Round'
+      ...Object.fromEntries(jobRounds.map(r => [r.id, r.label]))
     };
 
     return (
@@ -1306,8 +1525,8 @@ export default function InterviewPipelinePage() {
   // ── Feedback Modal — READ-ONLY VIEW ────────────────────────────────────────
   const InlineFeedbackModal = ({ cand, onClose }: { cand: TopCandidate; onClose: () => void }) => {
     const { showToast } = useToast();
-    const roundLabel     = activeTab === 'round1' ? 'Round 1' : activeTab === 'round2' ? 'Round 2' : 'HR Round';
-    const currentRoundId = activeTab === 'round1' ? 'round1'  : activeTab === 'round2' ? 'technical' : 'hr';
+    const currentRoundId = roundKeyForTab(activeTab);
+    const roundLabel     = jobRounds.find(r => r.id === currentRoundId)?.label ?? '';
 
     const visibleFeedback = getVisibleFeedback(cand.candidate_id, feedbackData?.feedback ?? []);
     const roundFeedback    = visibleFeedback.filter((fb: any) => fb.round === currentRoundId);
@@ -1315,8 +1534,8 @@ export default function InterviewPipelinePage() {
 
     // Derived booleans
     const hasFeedback    = roundFeedback.length > 0;
-    const isHrRound      = activeTab === 'hrround';
-    const isHrAdvanced   = isHrRound && (feedbackData?.timeline ?? []).find((t: any) => t.round === 'hr')?.status === 'advanced';
+    const isHrRound      = currentRoundId === jobRounds[jobRounds.length - 1].id;   // "last round" = offer stage
+    const isHrAdvanced   = isHrRound && (feedbackData?.timeline ?? []).find((t: any) => t.round === currentRoundId)?.status === 'advanced';
     const isHrSubmitted  = isHrRound && hasFeedback;
     const anyRejection   = allFeedback.some((fb: any) => fb.verdict === 'reject');
     const isOnHold       = !anyRejection && roundFeedback.some((fb: any) => fb.verdict === 'hold');
@@ -1383,7 +1602,7 @@ export default function InterviewPipelinePage() {
                     else if (hasFeedback)    {
                       label = isHrRound
                         ? 'Feedback Received'
-                        : currentRoundId === 'round1' ? 'R1 Feedback Received' : 'R2 Feedback Received';
+                        : `${jobRounds.find(r => r.id === currentRoundId)?.short ?? ''} Feedback Received`;
                       bg = '#EFF6FF'; col = '#2563EB';
                     }
                     return (
@@ -1527,6 +1746,16 @@ export default function InterviewPipelinePage() {
         />
       )}
 
+      {docsEmailTarget && (
+        <ConfirmDialog
+          message={`Send the documentation email (Aadhaar & PAN upload link) to ${docsEmailTarget.name}?`}
+          confirmLabel="Yes, Send Email" confirmColor="#EA580C"
+          isLoading={isSendingDocs}
+          onConfirm={doSendDocsEmail}
+          onCancel={() => !isSendingDocs && setDocsEmailTarget(null)}
+        />
+      )}
+
       {feedbackModalCand && <InlineFeedbackModal cand={feedbackModalCand} onClose={() => setFeedbackModalCand(null)} />}
 
       {showGenerateChoiceModal && (
@@ -1560,10 +1789,10 @@ export default function InterviewPipelinePage() {
 
         <div className="stage-wrap">
           <div className="stage-bar">
-            {(['round1','round2','hrround','onboarding'] as RoundTab[]).map(tab => {
+            {([...jobRounds.map(r => r.id), 'onboarding'] as RoundTab[]).map(tab => {
               const labels: Record<string, string> = {
-                round1: 'Round 1 — Technical', round2: 'Round 2 — Advanced',
-                hrround: 'HR Round', onboarding: 'Onboarding',
+                ...Object.fromEntries(jobRounds.map(r => [r.id, r.label])),
+                onboarding: 'Preboarding',
               };
               return (
                 <button key={tab} className={`stage-seg ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
@@ -1592,11 +1821,9 @@ export default function InterviewPipelinePage() {
             <div className="section-card">
               <div className="section-head">
                 <h2>
-                  {activeTab === 'round1' ? 'Round 1 — Technical Interview' :
-                   activeTab === 'round2' ? 'Round 2 — Advanced Technical' :
-                   activeTab === 'hrround' ? 'HR & Culture Fit' :
-                   activeTab === 'hired' ? 'Hired Candidates' :
-                   activeTab === 'archived' ? 'Archived Candidates' : 'Offer & Onboarding'}
+                  {jobRounds.find(r => r.id === activeTab)?.label ??
+                   (activeTab === 'hired' ? 'Hired Candidates' :
+                    activeTab === 'archived' ? 'Archived Candidates' : 'Offer & Preboarding')}
                 </h2>
                 <div className="meta">Manage candidates currently in this stage</div>
               </div>
@@ -1610,8 +1837,8 @@ export default function InterviewPipelinePage() {
               ) : (
                 activeCandidates.map((cand, idx) => {
                   const [primary, secondary] = candidateStatuses[cand.candidate_id] ?? ['Shortlisted', null];
-                  const ps = STATUS_STYLE[primary]   ?? STATUS_STYLE['Shortlisted'];
-                  const ss = secondary ? (STATUS_STYLE[secondary] ?? { bg: '#F3F4F6', color: '#4B5563' }) : null;
+                  const ps = statusStyle(primary);
+                  const ss = secondary ? statusStyle(secondary) : null;
 
                   return (
                     <div
@@ -1634,6 +1861,12 @@ export default function InterviewPipelinePage() {
                             {ss && secondary && (
                               <span className="badge" style={{ background: ss.bg, color: ss.color }}>{secondary}</span>
                             )}
+                            {activeTab === 'onboarding' && (() => {
+                              const pb = preboarding[cand.candidate_id];
+                              if (!pb) return offerAccepted(cand.candidate_id) ? <span className="badge b-gray">No Docs Record</span> : null;
+                              const b = PREBOARD_BADGE[pb.status];
+                              return b && <span className="badge" style={{ background: b.bg, color: b.color }}>{b.label}</span>;
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1666,7 +1899,7 @@ export default function InterviewPipelinePage() {
                             </button>
                             {/* --------------------------- */}
 
-                            {(activeTab === 'round2' || activeTab === 'hrround') && activeRole === 'hr' && (
+                            {roundIndex(jobRounds, activeTab) > 0 && activeRole === 'hr' && (
                                     <>
                                       <button
                                         className="btn-sm"
@@ -1692,13 +1925,27 @@ export default function InterviewPipelinePage() {
 
                         {activeTab === 'onboarding' && activeRole === 'hr' && (
                           <div className="row-acts" onClick={e => e.stopPropagation()}>
-                            {offerStatuses[cand.candidate_id] === 'accepted' ? (
-                              <button
-                                className="btn-sm primary"
-                                onClick={(e) => handleMoveToHired(cand, e)}
-                              >
-                                Move to Hired ✓
-                              </button>
+                            {offerAccepted(cand.candidate_id) ? (
+                              docsVerified(cand.candidate_id) ? (
+                                <button className="btn-sm primary" onClick={(e) => handleMoveToHired(cand, e)}>
+                                  Move to Hired ✓
+                                </button>
+                              ) : !preboarding[cand.candidate_id] ? (
+                                <button
+                                  className="btn-sm primary"
+                                  onClick={(e) => { e.stopPropagation(); setDocsEmailTarget(cand); }}
+                                >
+                                  Send Documentation Email
+                                </button>
+                              ) : (
+                                <button
+                                  className="btn-sm"
+                                  style={{ background: '#FFF7ED', color: '#EA580C', borderColor: '#FDBA74' }}
+                                  onClick={(e) => { e.stopPropagation(); openDocuments(cand.candidate_id); }}
+                                >
+                                  {docsActionLabel(cand.candidate_id)} →
+                                </button>
+                              )
                             ) : (
                               <button
                                 className="btn-sm primary"
@@ -1708,7 +1955,7 @@ export default function InterviewPipelinePage() {
                                   setShowGenerateChoiceModal(true);
                                 }}
                               >
-                                Generate Offer →
+                                {hasOfferSent(cand.candidate_id) ? 'Regenerate Offer →' : 'Generate Offer →'}
                               </button>
                             )}
                           </div>
@@ -1725,8 +1972,8 @@ export default function InterviewPipelinePage() {
             <ManualScheduleModal
               cand={manualCand}
               jobId={jobId!}
-              round={activeTab === 'round2' ? 'technical' : 'hr'}
-              roundLabel={activeTab === 'round2' ? 'Round 2 (Advanced Technical)' : 'HR Round'}
+              round={activeTab}
+              roundLabel={jobRounds.find(r => r.id === activeTab)?.label ?? ''}
               onClose={() => setManualCand(null)}
               onSuccess={() => { setManualCand(null); setRefreshKey(k => k + 1); }}
             />
@@ -1745,11 +1992,11 @@ export default function InterviewPipelinePage() {
                     <div className="c-meta">{selectedCandidate.relevant_exp} yrs · {selectedCandidate.email}</div>
                     <div className="badges" style={{ marginTop: 8 }}>
                       <span className="badge b-green">AI Pass: {Math.round(selectedCandidate.final_score * 100)}%</span>
-                      <span className="badge b-blue">{activeTab.toUpperCase()}</span>
+                      <span className="badge b-blue">{(jobRounds.find(r => r.id === activeTab)?.short ?? activeTab).toUpperCase()}</span>
                       {(() => {
                         const [dp, ds] = candidateStatuses[selectedCandidate.candidate_id] ?? ['Shortlisted', null];
-                        const dps = STATUS_STYLE[dp] ?? STATUS_STYLE['Shortlisted'];
-                        const dss = ds ? (STATUS_STYLE[ds] ?? { bg: '#F3F4F6', color: '#4B5563' }) : null;
+                        const dps = statusStyle(dp);
+                        const dss = ds ? statusStyle(ds) : null;
                         return <>
                           <span className="badge" style={{ background: dps.bg, color: dps.color }}>{dp}</span>
                           {dss && ds && <span className="badge" style={{ background: dss.bg, color: dss.color }}>{ds}</span>}
@@ -1762,7 +2009,7 @@ export default function InterviewPipelinePage() {
                 {/* ── Detail tabs (always above content) ──────────────── */}
                 <div className="det-tabs">
                   {(activeTab === 'onboarding' 
-                    ? (activeRole === 'hr' ? ['pipeline', 'offer'] : ['pipeline'])
+                    ? (activeRole === 'hr' ? ['pipeline', 'offer', 'documents'] : ['pipeline'])
                     : (activeTab === 'hired' || activeTab === 'archived')
                       ? ['pipeline', 'profile']
                       : ['pipeline', 'feedback', 'profile', 'questions']
@@ -1772,7 +2019,7 @@ export default function InterviewPipelinePage() {
                       className={`det-tab ${detailTab === t ? 'active' : ''}`} 
                       onClick={() => setDetailTab(t as DetailTab)}
                     >
-                      {t === 'offer' ? 'Generate Offer' : t.charAt(0).toUpperCase() + t.slice(1)}
+                      {t === 'offer' ? (hasOfferSent(selectedCandidate?.candidate_id ?? '') ? 'Regenerate Offer' : 'Generate Offer') : t.charAt(0).toUpperCase() + t.slice(1)}
                     </button>
                   ))}
                 </div>
@@ -1790,15 +2037,45 @@ export default function InterviewPipelinePage() {
                   <div className="det-body">
                     <div style={{ marginTop: 28, padding: 20, background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 12, textAlign: 'center' }}>
                       <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px', fontSize: 20 }}>✦</div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 4 }}>{offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? 'Offer accepted 🎉' : 'Ready to generate an offer?'}</div>
-                      <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>{offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? 'Move this candidate to Hired to complete the process.' : 'Open the full-screen AI Copilot to draft and finalise the offer letter.'}</div>
-                      {offerStatuses[selectedCandidate.candidate_id] === 'accepted' ? (
-                        <button
-                          onClick={() => handleMoveToHired(selectedCandidate)}
-                          style={{ background: '#16A34A', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
-                        >
-                          Move to Hired ✓
-                        </button>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 4 }}>
+                        {offerAccepted(selectedCandidate.candidate_id)
+                          ? (docsVerified(selectedCandidate.candidate_id) ? 'Documents verified ✅' : 'Offer accepted 🎉')
+                          : hasOfferSent(selectedCandidate.candidate_id) ? 'Offer sent' : 'Ready to generate an offer?'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 18 }}>
+                        {offerAccepted(selectedCandidate.candidate_id)
+                          ? (docsVerified(selectedCandidate.candidate_id)
+                              ? 'All documents are verified. You can now move this candidate to Hired.'
+                              : !preboarding[selectedCandidate.candidate_id]
+                                ? 'Send the documentation email to ask the candidate for Aadhaar and PAN.'
+                                : 'Waiting for the candidate to upload and HR to verify Aadhaar and PAN before hiring.')
+                          : hasOfferSent(selectedCandidate.candidate_id)
+                            ? 'Waiting for the candidate to respond. You can regenerate and resend the offer if needed.'
+                            : 'Open the full-screen AI Copilot to draft and finalise the offer letter.'}
+                      </div>
+                      {offerAccepted(selectedCandidate.candidate_id) ? (
+                        docsVerified(selectedCandidate.candidate_id) ? (
+                          <button
+                            onClick={() => handleMoveToHired(selectedCandidate)}
+                            style={{ background: '#16A34A', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
+                          >
+                            Move to Hired ✓
+                          </button>
+                        ) : !preboarding[selectedCandidate.candidate_id] ? (
+                          <button
+                            onClick={() => setDocsEmailTarget(selectedCandidate)}
+                            style={{ background: '#EA580C', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
+                          >
+                            Send Documentation Email
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => openDocuments(selectedCandidate.candidate_id)}
+                            style={{ background: '#EA580C', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
+                          >
+                            {docsActionLabel(selectedCandidate.candidate_id)} →
+                          </button>
+                        )
                       ) : (
                         <button
                           onClick={() => {
@@ -1807,13 +2084,22 @@ export default function InterviewPipelinePage() {
                           }}
                           style={{ background: '#111827', color: '#fff', padding: '10px 22px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter, sans-serif' }}
                         >
-                          Open Offer Copilot →
+                          {hasOfferSent(selectedCandidate.candidate_id) ? 'Regenerate Offer →' : 'Open Offer Copilot →'}
                         </button>
                       )}
                     </div>
                   </div>
                 )}
 
+                {detailTab === 'documents' && activeTab === 'onboarding' && (
+                  <div className="det-body">
+                    <DocumentsPanel
+                      cand={selectedCandidate} jdTitle={jdTitle} jobId={jobId!}
+                      rec={preboarding[selectedCandidate.candidate_id]}
+                      call={pbCall} onChanged={loadPreboarding} showToast={showToast} />
+                  </div>
+                )}
+                
                 {/* TAB: Feedback */}
                 {detailTab === 'feedback' && (
                   <div className="det-body">
@@ -1910,7 +2196,7 @@ export default function InterviewPipelinePage() {
                               : 'Failed to auto-generate. Click generate to try again.'}
                         </div>
                       </div>
-                      <button className="btn-sm primary" onClick={generateQuestions} disabled={questionsLoading} style={{ gap: 6, minWidth: 124 }}>
+                      <button className="btn-sm primary" onClick={() => generateQuestions(true)} disabled={questionsLoading} style={{ gap: 6, minWidth: 124 }}>
                         {questionsLoading
                           ? <><RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> Generating…</>
                           : <><span style={{ fontSize: 14 }}>✦</span> {hasQuestions ? 'Regenerate' : 'Generate'}</>}
@@ -1970,7 +2256,7 @@ export default function InterviewPipelinePage() {
                                 <span style={{ fontSize: 9, fontWeight: 700, color: '#EA580C', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#FFF7ED', padding: '2px 7px', borderRadius: 20 }}>Coding</span>
                                 <span style={{ fontSize: 9, fontWeight: 600, padding: '2px 7px', borderRadius: 20, background: q.difficulty === 'Hard' ? '#FEF2F2' : q.difficulty === 'Medium' ? '#FEF9C3' : '#ECFDF5', color: q.difficulty === 'Hard' ? '#DC2626' : q.difficulty === 'Medium' ? '#B45309' : '#059669' }}>{q.difficulty}</span>
                                 <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color: '#D1D5DB' }}>C{i + 1}</span>
-                              </div>
+                              </div> 
                               {/* Problem statement with smart schema rendering */}
                               <div style={{ marginBottom: 10 }}>{renderQuestionText(q.question)}</div>
                               <details>

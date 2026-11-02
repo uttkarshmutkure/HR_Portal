@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import {
-  Briefcase, Loader2, AlertCircle, RefreshCw, Plus,
+  Briefcase, Loader2, AlertCircle, AlertTriangle, RefreshCw, Plus,
   ChevronDown, ChevronUp, X, Calendar,
   Edit2, Trash2, Play, Trash, CheckCircle, Clock, Upload, Search, FileText
 } from 'lucide-react';
@@ -9,6 +9,7 @@ import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
 import { useToast } from '../components/ToastContext';
 import { useAuth } from '../components/AuthContext';
+import { InterviewRound, RoundKind, DEFAULT_ROUNDS, MAX_ROUNDS, normalizeRounds, newRoundId } from '../../services/roundConfig';
 
 const FONT = 'Inter, sans-serif';
 
@@ -34,6 +35,7 @@ const REFER_CANDIDATE_URL = import.meta.env.VITE_REFER_CANDIDATE_URL;
 const MAX_RESUME_BYTES = 10 * 1024 * 1024;   // per file
 const MAX_RESUME_TOTAL = 30 * 1024 * 1024;   // per upload (server limit is 32 MB)
 const MAX_RESUME_FILES = 20;
+const SHOW_RERUN_SCREENING = false;   // set to true to show the Re-run Screening button again
 const fmtSize = (n: number) =>
   n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
@@ -144,8 +146,9 @@ function WorkModeBadge({ mode }: { mode: 'WFO' | 'WFH' | string }) {
 }
 
 // ── InterviewerCard ───────────────────────────────────────────────────
-function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot, canDelete }: {
+function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot, canDelete, rounds }: {
   inv: any;
+  rounds: InterviewRound[];
   onEdit: (inv: any) => void;
   onDelete: (id: string) => void;
   onRemoveSlot: (invId: string, slot: { day: string; start_time: string; end_time: string }) => void;
@@ -170,7 +173,7 @@ function InterviewerCard({ inv, onEdit, onDelete, onRemoveSlot, canDelete }: {
 
   const slotCount = flatSlots.length;
 
-  const roundText = inv.round === 'technical' ? 'Round 2' : inv.round === 'hr' ? 'HR Round' : 'Round 1';
+  const roundText = rounds.find(r => r.id === inv.round)?.label ?? inv.round;
 
   // Collect all distinct work modes across days for the card header badge
   const allModes = daySlots.length > 0
@@ -428,14 +431,164 @@ function DayScheduler({ value, onChange }: { value: DaySlot[]; onChange: (slots:
   );
 }
 
+
+// ── RoundsEditor: HR adds / removes / renames interview rounds ────────
+function RoundsEditor({ jobId, initial, onSaved }: {
+  jobId: string; initial: InterviewRound[]; onSaved: (r: InterviewRound[]) => void;
+}) {
+  const { showToast } = useToast();
+  const [rounds, setRounds] = useState<InterviewRound[]>(initial);
+  const [saving, setSaving] = useState(false);
+
+  // when parent loads rounds from the backend, refresh the editor
+  useEffect(() => { setRounds(initial); }, [initial]);
+
+  const update = (i: number, patch: Partial<InterviewRound>) =>
+    setRounds(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+
+  const add = () => setRounds(rs => [...rs, {
+    id: newRoundId(),
+    label: `Round ${rs.length + 1}`,
+    short: `R${rs.length + 1}`,
+    kind: 'technical' as RoundKind,
+  }]);
+
+  const remove = (i: number) => setRounds(rs => rs.filter((_, idx) => idx !== i));
+
+  // HR picks the number of rounds; rows are added or trimmed to match
+  const setCount = (n: number) => setRounds(rs => {
+    if (n <= rs.length) return rs.slice(0, n);
+    const extra = Array.from({ length: n - rs.length }, (_, k) => ({
+      id: newRoundId(),
+      label: `Round ${rs.length + k + 1}`,
+      short: `R${rs.length + k + 1}`,
+      kind: 'technical' as RoundKind,
+    }));
+    return [...rs, ...extra];
+  });
+
+  const save = async () => {
+    if (rounds.some(r => !r.label.trim())) { showToast('Every round needs a name', 'error'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(DATA_MANAGER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'SAVE_JOB_ROUNDS', jobId, rounds }),
+      });
+      const d = await res.json();
+      if (!d.success) throw new Error(d.error || 'Failed');
+      showToast('Interview rounds saved', 'success');
+      onSaved(d.rounds);
+    } catch (e: any) {
+      showToast(e.message || 'Failed to save rounds', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inp: React.CSSProperties = {
+    padding: '7px 10px', border: `1px solid ${T.gray200}`, borderRadius: '6px',
+    fontSize: '12px', fontFamily: FONT, outline: 'none', background: T.white,
+  };
+
+  return (
+    <div style={{ marginBottom: '20px', paddingBottom: '16px', borderBottom: `0.5px solid ${T.gray200}` }}>
+      <div style={{ fontSize: '11px', fontWeight: 600, color: T.gray400, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT, marginBottom: '10px' }}>
+        Interview Rounds ({rounds.length})
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+        <label style={{ fontSize: '12px', fontWeight: 600, color: '#374151', fontFamily: FONT }}>Number of rounds</label>
+        <select
+          value={rounds.length}
+          onChange={e => setCount(Number(e.target.value))}
+          style={{ padding: '6px 10px', border: `1px solid ${T.gray200}`, borderRadius: '6px', fontSize: '12px', fontFamily: FONT, cursor: 'pointer' }}
+        >
+          {Array.from({ length: MAX_ROUNDS }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </div>
+
+      {rounds.map((r, i) => (
+        <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+          <span style={{ width: '18px', fontSize: '11px', color: T.gray400, fontFamily: FONT }}>{i + 1}</span>
+          <input value={r.label} onChange={e => update(i, { label: e.target.value })} placeholder="Round name" style={{ ...inp, flex: 1 }} />
+          <input value={r.short} maxLength={4} onChange={e => update(i, { short: e.target.value })} placeholder="Short" style={{ ...inp, width: '56px' }} />
+          <select value={r.kind} onChange={e => update(i, { kind: e.target.value as RoundKind })} style={{ ...inp, cursor: 'pointer' }}>
+            <option value="technical">Technical</option>
+            <option value="hr">HR / Behavioral</option>
+          </select>
+          <button
+            onClick={() => remove(i)}
+            disabled={rounds.length === 1}
+            title={rounds.length === 1 ? 'At least one round is required' : 'Remove round'}
+            style={{ background: 'none', border: 'none', cursor: rounds.length === 1 ? 'not-allowed' : 'pointer', color: T.red, opacity: rounds.length === 1 ? 0.3 : 1, display: 'flex', padding: '4px' }}
+          >
+            <Trash size={14} />
+          </button>
+        </div>
+      ))}
+
+      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+        <button
+          onClick={add}
+          disabled={rounds.length >= MAX_ROUNDS}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '6px', color: T.textSub, cursor: rounds.length >= MAX_ROUNDS ? 'not-allowed' : 'pointer' }}
+        >
+          <Plus size={12} /> Add round
+        </button>
+        <button
+          onClick={save}
+          disabled={saving}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', fontSize: '11px', fontWeight: 600, fontFamily: FONT, background: T.orange, border: 'none', borderRadius: '6px', color: T.white, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}
+        >
+          {saving ? 'Saving…' : 'Save rounds'}
+        </button>
+      </div>
+      <div style={{ fontSize: '10px', color: T.gray400, marginTop: '6px', fontFamily: FONT }}>
+        Max {MAX_ROUNDS} rounds. Add new rounds at the end. Avoid removing a round that candidates are already in.
+      </div>
+    </div>
+  );
+}
+
+function WorkTypeBadge({ type }: { type?: string }) {
+  if (!type) return null;
+  const styles: Record<string, { bg: string; color: string; border: string }> = {
+    WFO:    { bg: '#F0FDF4', color: '#15803D', border: '#BBF7D0' },
+    WFH:    { bg: T.blueBg,  color: T.blueText, border: '#BFDBFE' },
+    Hybrid: { bg: '#F5F3FF', color: '#6D28D9', border: '#DDD6FE' },
+  };
+  const s = styles[type] || styles.WFO;
+  return (
+    <span style={{
+      padding: '1px 7px', borderRadius: '4px', fontSize: '9px', fontWeight: 600,
+      fontFamily: FONT, letterSpacing: '0.04em',
+      background: s.bg, color: s.color, border: `0.5px solid ${s.border}`,
+      }}>{type === 'WFO' ? 'In office' : type === 'WFH' ? 'Remote' : type}</span>
+  );
+}
+
 function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { activeRole, user } = useAuth();
   const [expanded, setExpanded] = useState(autoExpand ?? false);
-  const [subTab, setSubTab] = useState<'jd' | 'setup'>('jd');
+  const [subTab, setSubTab] = useState<'jd' | 'setup' | 'rounds'>('jd');
 
   const [interviewers, setInterviewers] = useState<any[]>([]);
+  const [rounds, setRounds] = useState<InterviewRound[]>(DEFAULT_ROUNDS);
+
+  useEffect(() => {
+    fetch(DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId: job.job_id }),
+    })
+      .then(r => r.json())
+      .then(d => setRounds(normalizeRounds(d.rounds)))
+      .catch(e => console.error('Failed to load rounds', e));
+  }, [job.job_id]);
 
   useEffect(() => {
     fetch(DATA_MANAGER_URL, {
@@ -493,6 +646,92 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
     }, 3000);
   };
 
+  // ── Execute: move staged resumes to the processing bucket ────────────
+  const [stagingCount, setStagingCount] = useState(0);
+  const [promo, setPromo] = useState({
+    status: 'NONE', total: 0, promoted: 0, processed: 0, failed: 0, screened: 0, pending: 0, done: true,
+  });
+  const [executing, setExecuting] = useState(false);
+  const promoPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const callDataManager = async (body: object) => {
+    const res = await fetch(DATA_MANAGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  };
+
+  const stopPromoPolling = () => {
+    if (promoPollRef.current) { clearInterval(promoPollRef.current); promoPollRef.current = null; }
+  };
+
+  // Reads waiting count + promotion status. Returns the status string.
+  const refreshPromo = async (): Promise<boolean> => {
+    try {
+      const [c, s] = await Promise.all([
+        callDataManager({ type: 'GET_STAGING_COUNT', jobId: job.job_id }),
+        callDataManager({ type: 'GET_PROMOTION_STATUS', jobId: job.job_id }),
+      ]);
+      if (c.success) setStagingCount(c.count);
+      if (s.success) {
+        setPromo({
+          status: s.status, total: s.total, promoted: s.promoted,
+          processed: s.processed ?? 0, failed: s.failed ?? 0,
+          screened: s.screened ?? 0, pending: s.pending ?? 0, done: s.done ?? true,
+        });
+        console.log(new Date().toLocaleTimeString(), 'promo', s);
+        return s.status === 'REQUESTED' || s.status === 'RUNNING' || (s.status === 'DONE' && !s.done);
+      }
+    } catch { /* network blip — ignore */ }
+    return false;
+  };
+
+  const startPromoPolling = () => {
+    stopPromoPolling();
+    promoPollRef.current = setInterval(async () => {
+      const active = await refreshPromo();
+      if (!active) {
+        stopPromoPolling();
+        showToast('All resumes moved, processed and screened.', 'success');
+      }
+    }, 4000);
+  };
+
+  // On load (HR only): show the waiting count, and resume polling if a run is in progress
+  useEffect(() => {
+    if (activeRole !== 'hr') return;
+    refreshPromo().then(active => { if (active) startPromoPolling(); });
+    return () => stopPromoPolling();
+  }, [job.job_id, activeRole]);
+
+  const handleExecute = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (executing || stagingCount === 0) return;
+    if (!window.confirm(`Start processing ${stagingCount} resume(s) for "${job.title}"?`)) return;
+
+    setExecuting(true);
+    try {
+      const d = await callDataManager({
+        type: 'REQUEST_PROMOTION',
+        jobId: job.job_id,
+        requestedBy: user?.email || '',
+      });
+      if (d.error) { showToast(d.error, 'error'); return; }
+      showToast('Execution started. Resumes will be processed in batches.', 'success');
+      await refreshPromo();
+      startPromoPolling();
+    } catch {
+      showToast('Network error — could not start execution.', 'error');
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const promoActive = promo.status === 'REQUESTED' || promo.status === 'RUNNING' || (promo.status === 'DONE' && !promo.done);
+  const needsAttention = !executing && !promoActive;
+
   const handleUploadClick = (e: React.MouseEvent) => {
     e.stopPropagation(); // keeps the row from expanding/collapsing
     setPendingFiles([]);
@@ -547,11 +786,10 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
 
       const skipped = data.skipped?.length ?? 0;
       showToast(
-        `${data.count} resume(s) uploaded${skipped ? `, ${skipped} skipped (already uploaded)` : ''}. Pipeline incoming...`,
+        `${data.count} resume(s) uploaded${skipped ? `, ${skipped} skipped` : ''}. Processing and screening will start automatically.`,
         'success'
       );
-      if (data.files?.length) pollResumeStatus(data.files[0]);   // exact name the server stored
-      startPolling();
+      refreshPromo();
       setShowUploadModal(false);
       setPendingFiles([]);
     } catch (err: any) {
@@ -825,9 +1063,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
                   onChange={e => setRound(e.target.value)}
                   style={{ width: '100%', padding: '9px 10px', borderRadius: '8px', border: '1px solid #E5E7EB', fontSize: '13px', outline: 'none', boxSizing: 'border-box', background: '#fff', appearance: 'auto' }}
                 >
-                  <option value="round1">Round 1</option>
-                  <option value="technical">Round 2</option>
-                  <option value="hr">HR Round</option>
+                  {rounds.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
                 </select>
               </div>
             </div>
@@ -951,7 +1187,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
         <div style={{ background: T.white, borderRadius: '14px', width: '100%', maxWidth: '540px', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 48px rgba(0,0,0,0.14)', fontFamily: FONT }}>
           {/* Header */}
           <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.gray100}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: T.text, fontFamily: FONT }}>Refer a friend</h3>
+            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: T.text, fontFamily: FONT }}>Refer a candidate</h3>
             <button onClick={() => setShowReferModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.gray400, display: 'flex', alignItems: 'center', padding: '2px' }}><X size={18} /></button>
           </div>
 
@@ -1184,31 +1420,46 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
         <div style={{ color: T.gray400, display: 'flex', alignItems: 'center' }}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</div>
         <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: ic.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Briefcase size={14} style={{ color: ic.color }} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '2px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: T.text, fontFamily: FONT }}>{job.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: '10px', marginBottom: '2px' }}>
+            <div
+              title={job.title}
+              style={{
+                fontSize: '13px', fontWeight: 600, color: T.text, fontFamily: FONT, minWidth: 0,
+                ...(expanded
+                  ? { whiteSpace: 'normal', overflow: 'visible', wordBreak: 'break-word' }
+                  : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+              }}
+            >
+              {job.title}
+            </div>
             <span style={{
               padding: '2px 8px', borderRadius: '4px',
               fontSize: '10px', fontWeight: 600, fontFamily: FONT, letterSpacing: '0.02em',
+              whiteSpace: 'nowrap', flexShrink: 0,
               background: T.gray100, color: T.gray600,
               border: `0.5px solid ${T.gray200}`,
             }}>
               {job.job_id}
             </span>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowReferModal(true); }}
-              style={{ padding: '4px 11px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: '0.5px solid #C7D2FE', borderRadius: '6px', color: '#5B5FCF', cursor: 'pointer', transition: 'background .12s', flexShrink: 0 }}
-            >
-              Refer a friend
-            </button>
+            {job.referral_enabled !== false && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowReferModal(true); }}
+                style={{ padding: '4px 11px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: '0.5px solid #C7D2FE', borderRadius: '6px', color: '#5B5FCF', cursor: 'pointer', transition: 'background .12s', flexShrink: 0 }}
+              >
+                Refer a candidate
+              </button>
+            )}
           </div>
           <div style={{ fontSize: '11px', color: T.gray600, fontFamily: FONT, display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap' }}>
-            {job.location && `${job.location} · `}{job.experience_min}–{job.experience_max} yrs ·{' '}
+            {job.location && `${job.location} · `}
+            {job.work_type && <><WorkTypeBadge type={job.work_type} />&nbsp;·&nbsp;</>}
+            {job.experience_min}–{job.experience_max} yrs ·{' '}
             {job.must_have_skills.slice(0, 3).map((s) => <span key={s} style={{ padding: '1px 7px', borderRadius: '20px', fontSize: '10px', fontWeight: 500, background: T.orangeLight, color: '#9A3412', margin: '0 2px' }}>{s}</span>)}
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', flexShrink: 0, maxWidth: '55%' }}>
           {activeRole === 'hr' && (
-          <div style={{ display: 'flex', gap: '6px', position: 'relative' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', position: 'relative' }}>
             <input
               type="file" 
               ref={fileInputRef} 
@@ -1233,6 +1484,35 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
               {uploadingResume ? 'Uploading…' : 'Upload Resumes'}
             </button>
 
+            <button
+              onClick={handleExecute}
+              disabled={executing || promoActive || stagingCount === 0}
+              title={needsAttention
+                ? (stagingCount > 0
+                    ? `${stagingCount} resume(s) waiting. Click to process them: each resume is read and the candidate is added to this job. Runs in safe batches.`
+                    : 'No resumes waiting right now')
+                : 'Process the uploaded resumes: read each resume and add the candidate to this job. Runs in the background in safe batches.'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '5px',
+                padding: '5px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT,
+                borderRadius: '6px',
+                border: `0.5px solid ${promoActive ? '#BFDBFE' : needsAttention ? T.orangeBorder : T.gray200}`,
+                background: promoActive ? T.blueBg : needsAttention ? T.orangeLight : T.white,
+                 color: promoActive ? T.blueText : needsAttention ? '#C2540A' : (stagingCount === 0 ? T.gray400 : T.textSub),
+                cursor: (executing || promoActive || stagingCount === 0) ? 'not-allowed' : 'pointer',
+                transition: 'all .15s',
+              }}
+            >
+              {(executing || promoActive)
+                ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                : needsAttention
+                  ? <AlertTriangle size={13} fill="#FBBF24" style={{ color: '#B45309' }} />
+                  : <Play size={11} style={{ color: T.blue }} />}
+              {executing ? 'Starting…'
+                : promoActive ? `Moved ${promo.promoted}/${promo.total} · Processed ${promo.processed} · Screened ${promo.screened}${promo.failed ? ` · Failed ${promo.failed}` : ''}`
+                : `Process Resumes (${stagingCount} waiting)`}
+            </button>
+            
             {resumeStatus && !['completed', 'skipped_duplicate'].includes(resumeStatus.step) && (
               <div style={{
                 position: 'absolute', top: '34px', left: 0, background: T.white,
@@ -1246,11 +1526,11 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
                 {resumeStatus.error && <div style={{ color: T.textSub, marginTop: '4px' }}>{resumeStatus.error}</div>}
               </div>
             )}
-
+            {SHOW_RERUN_SCREENING && (
             <button
               onClick={handleRunScreening}
               disabled={screenStatus === 'loading'}
-              title={screenError ?? 'Run AI screening pipeline for this job'}
+              title={screenError ?? 'Manually re-run AI ranking for candidates that are already processed. Not needed after Process Resumes, because screening starts automatically.'}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '5px',
                 padding: '5px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT,
@@ -1272,8 +1552,9 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
               {screenStatus === 'success' && <CheckCircle size={11} />}
               {screenStatus === 'idle'    && <Play size={11} />}
               {screenStatus === 'error'   && <X size={11} />}
-              {screenStatus === 'loading' ? 'Running…' : screenStatus === 'success' ? 'Done!' : screenStatus === 'error' ? (screenError || 'Failed') : 'Run Screening'}
+              {screenStatus === 'loading' ? 'Running…' : screenStatus === 'success' ? 'Done!' : screenStatus === 'error' ? (screenError || 'Failed') : 'Re-run Screening'}
             </button>
+            )}
             <button onClick={handleResultsClick} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: T.white, border: `0.5px solid ${T.gray200}`, borderRadius: '6px', color: T.textSub, cursor: 'pointer', transition: 'background .12s' }}>Results</button>
           </div>
           )}
@@ -1288,9 +1569,14 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
               {activeRole !== 'user' && (
                 <button onClick={(e) => { e.stopPropagation(); setSubTab('setup'); }} style={{ background: 'none', border: 'none', padding: '10px 0', fontSize: '12px', fontWeight: 600, fontFamily: FONT, cursor: 'pointer', transition: 'color 0.15s', color: subTab === 'setup' ? T.orange : T.gray600, borderBottom: subTab === 'setup' ? `2px solid ${T.orange}` : '2px solid transparent', marginBottom: '-1px' }}>Hiring Setup</button>
               )}
+              {activeRole === 'hr' && (
+                <button onClick={(e) => { e.stopPropagation(); setSubTab('rounds'); }} style={{ background: 'none', border: 'none', padding: '10px 0', marginLeft: '20px', fontSize: '12px', fontWeight: 600, fontFamily: FONT, cursor: 'pointer', transition: 'color 0.15s', color: subTab === 'rounds' ? T.orange : T.gray600, borderBottom: subTab === 'rounds' ? `2px solid ${T.orange}` : '2px solid transparent', marginBottom: '-1px' }}>Interview Rounds</button>
+              )}
             </div>
             <div style={{ padding: '14px 16px', background: T.white }}>
-              {subTab === 'jd' ? (
+              {subTab === 'rounds' ? (
+                <RoundsEditor jobId={job.job_id} initial={rounds} onSaved={setRounds} />
+              ) : subTab === 'jd' ? (
                 <p style={{ fontSize: '12px', lineHeight: 1.65, color: T.textSub, fontFamily: FONT, whiteSpace: 'pre-line', margin: 0 }}>{(job as any).description || `We are seeking a highly skilled ${job.title}...`}</p>
               ) : (
                 <div style={{ animation: 'fadeIn 0.2s ease-in-out' }}>
@@ -1311,6 +1597,7 @@ function JobRow({ job, autoExpand }: { job: JobSummary; autoExpand?: boolean }) 
                         onDelete={handleDeleteInterviewer}
                         onRemoveSlot={handleRemoveSlotFromCard}
                         canDelete={activeRole === 'hr'}
+                        rounds={rounds}
                       />
                     ))}
                     {visibleInterviewers.length === 0 && (

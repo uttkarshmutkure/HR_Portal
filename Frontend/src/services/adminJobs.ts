@@ -13,6 +13,8 @@ export interface AdminJob {
   experience_min: number;
   experience_max: number;
   location: string;
+  work_type: string;
+  referral_enabled: boolean;
   recruiter_email: string;
   status: string;
   created_at: string | null;
@@ -29,6 +31,7 @@ export interface JobFormInput {
   experience_min: number;
   experience_max: number;
   location: string;
+  work_type: string;
   recruiter_email?: string;
 }
 
@@ -59,12 +62,14 @@ export const listAdminJobs = async (
 
 export const createJob = async (
   requesterEmail: string,
-  input: { jobId: string; designation?: string; file: File }
+  input: { jobId: string; designation?: string; location: string; workType: string; file: File }
 ): Promise<{ job_id: string }> => {
   const form = new FormData();
   form.append('type', 'CREATE_JOB');
   form.append('requester_email', requesterEmail);
   form.append('job_id', input.jobId.trim());
+  form.append('location', input.location.trim());
+  form.append('work_type', input.workType);
   if (input.designation?.trim()) form.append('designation', input.designation.trim());
   form.append('file', input.file);
 
@@ -100,4 +105,8 @@ export const restoreJob = async (requesterEmail: string, jobId: string): Promise
 
 export const deleteJob = async (requesterEmail: string, jobId: string): Promise<void> => {
   await callManageJobs({ type: 'DELETE_JOB', requester_email: requesterEmail, job_id: jobId });
+};
+
+export const setReferral = async (requesterEmail: string, jobId: string, enabled: boolean): Promise<void> => {
+  await callManageJobs({ type: 'SET_REFERRAL', requester_email: requesterEmail, job_id: jobId, enabled });
 };

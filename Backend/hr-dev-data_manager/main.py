@@ -1,13 +1,47 @@
+# data_manager main.py
 import os
 import json
 import re
-from google.cloud import bigquery
+from google.cloud import bigquery, storage
 from google import genai
 import functions_framework
 
 bq_client = bigquery.Client()
 project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
 dataset_id = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
+
+gcs_client     = storage.Client()
+staging_bucket = os.environ.get('GCS_STAGING_BUCKET_NAME', 'hr-data-staging-at')
+
+
+def staging_count(job_id: str) -> int:
+    blobs = gcs_client.bucket(staging_bucket).list_blobs(prefix=f"resumes/{job_id}/")
+    return sum(1 for b in blobs if b.name.lower().endswith(".pdf"))
+
+MAX_ROUNDS = 6
+ID_PATTERN = re.compile(r"^[a-z0-9_]{1,30}$")
+DEFAULT_ROUNDS = [
+    {"id": "round1",    "label": "Technical Interview", "short": "R1", "kind": "technical"},
+    {"id": "technical", "label": "Advanced Technical",  "short": "R2", "kind": "technical"},
+    {"id": "hr",        "label": "HR & Culture Fit",    "short": "HR", "kind": "hr"},
+]
+
+def validate_rounds(rounds):
+    if not isinstance(rounds, list) or not (1 <= len(rounds) <= MAX_ROUNDS):
+        return None, f"Rounds must be a list of 1 to {MAX_ROUNDS} items"
+    cleaned, seen = [], set()
+    for r in rounds:
+        rid   = str(r.get("id", "")).strip().lower()
+        label = str(r.get("label", "")).strip()
+        short = str(r.get("short", "")).strip()[:4]
+        kind  = r.get("kind")
+        if not ID_PATTERN.match(rid):  return None, f"Invalid round id: {rid!r}"
+        if rid in seen:                return None, f"Duplicate round id: {rid}"
+        if not label:                  return None, "Every round needs a label"
+        if kind not in ("technical", "hr"): return None, f"Invalid kind for {rid}"
+        seen.add(rid)
+        cleaned.append({"id": rid, "label": label, "short": short or label[:2].upper(), "kind": kind})
+    return cleaned, None
 
 @functions_framework.http
 def handle_candidate_data(request):
@@ -317,7 +351,7 @@ def handle_candidate_data(request):
             status_params = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
             rows = list(bq_client.query(status_query, job_config=bigquery.QueryJobConfig(query_parameters=status_params)).result())
             current_status = rows[0].pipeline_status if rows and rows[0].pipeline_status else 'IDLE'
-            return (json.dumps({'status': current_status}), 200, headers)
+            return (json.dumps({'status': current_status, 'pipeline_status': current_status}), 200, headers)
 
         # ── GET_RESUME_STATUS ───────────────────────────────────────────────────
         # Polled by the frontend to show live per-resume processing progress.
@@ -439,7 +473,9 @@ def handle_candidate_data(request):
                     candidate_result,
                     screening_status,
                     ai_screening_results,
-                    reject_reason
+                    reject_reason,
+                    screening_form_sent_at,
+                    screening_form_submitted_at
                 FROM `{project_id}.{dataset_id}.candidates`
                 WHERE job_id = @job_id
                   AND screening_status = 'COMPLETED'
@@ -467,6 +503,8 @@ def handle_candidate_data(request):
                     'phone':               row.phone or '',
                     'candidate_result':    row.candidate_result,
                     'reject_reason':       row.reject_reason or '',
+                    'screening_form_sent_at':      row.screening_form_sent_at.isoformat() if row.screening_form_sent_at else None,
+                    'screening_form_submitted_at': row.screening_form_submitted_at.isoformat() if row.screening_form_submitted_at else None,
                     
                     'final_score':         float(ai_data.get('final_score', 0)),
                     'similarity_score':    float(ai_data.get('similarity_score', 0)),
@@ -520,19 +558,37 @@ def handle_candidate_data(request):
             job_id = data.get('jobId')
             if not job_id:
                 return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            
+            # Pipeline view also needs candidates who were archived (Rejected)
+            # because they declined an offer. The plain shortlist view does not.
+            if data.get('forPipeline'):
+                offer_clause = f"""
+                    OR (candidate_result = 'Rejected' AND candidate_id IN (
+                        SELECT candidate_id
+                        FROM `{project_id}.{dataset_id}.offer_letters`
+                        WHERE job_id = @job_id AND status = 'rejected'))
+                """
+            else:
+                offer_clause = ""
 
             query = f"""
-                    SELECT
-                        candidate_id,
-                        name,
-                        email,
-                        phone,
-                        candidate_result,
-                        ai_screening_results
-                    FROM `{project_id}.{dataset_id}.candidates`
-                    WHERE job_id = @job_id
-                        AND candidate_result IN ('Shortlisted', 'Referred', 'Interview', 'Selected', 'Hired')
-                """
+                SELECT
+                    candidate_id,
+                    name,
+                    email,
+                    phone,
+                    candidate_result,
+                    ai_screening_results,
+                    screening_form_sent_at,
+                    screening_form_submitted_at,
+                    TO_JSON_STRING(screening_form) AS screening_form
+                FROM `{project_id}.{dataset_id}.candidates`
+                WHERE job_id = @job_id
+                    AND (
+                        candidate_result IN ('Shortlisted', 'Referred', 'Interview', 'Selected', 'Hired')
+                        {offer_clause}
+                    )
+            """
             params = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
             rows = list(bq_client.query(
                 query,
@@ -557,6 +613,9 @@ def handle_candidate_data(request):
                     'email':             row.email,
                     'phone':             row.phone or '',
                     'candidate_result':  row.candidate_result,
+                    'screening_form_sent_at':      row.screening_form_sent_at.isoformat() if row.screening_form_sent_at else None,
+                    'screening_form_submitted_at': row.screening_form_submitted_at.isoformat() if row.screening_form_submitted_at else None,
+                    'screening_form':              json.loads(row.screening_form) if row.screening_form else None,
                     'similarity_score': float(ai_data.get('similarity_score', 0)),
                     'final_score':       float(ai_data.get('final_score', 0)),
                     'overall_result':    ai_data.get('overall_result', ''),
@@ -768,7 +827,174 @@ def handle_candidate_data(request):
             rows = list(bq_client.query(check_query, job_config=bigquery.QueryJobConfig(query_parameters=check_params)).result())
 
             return (json.dumps({'alreadySubmitted': len(rows) > 0}), 200, headers)
+
+        # ── GET_JOB_ROUNDS ─────────────────────────────────────────────────────
+        elif action == 'GET_JOB_ROUNDS':
+            job_id = data.get('jobId')
+            if not job_id:
+                return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            q = f"SELECT interview_rounds FROM `{project_id}.{dataset_id}.jobs` WHERE job_id = @job_id LIMIT 1"
+            p = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
+            rows = list(bq_client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=p)).result())
+            if rows and rows[0].interview_rounds:
+                try:
+                    return (json.dumps({'success': True, 'rounds': json.loads(rows[0].interview_rounds), 'isDefault': False}), 200, headers)
+                except Exception:
+                    pass
+            return (json.dumps({'success': True, 'rounds': DEFAULT_ROUNDS, 'isDefault': True}), 200, headers)
+
+        # ── SAVE_JOB_ROUNDS ────────────────────────────────────────────────────
+        elif action == 'SAVE_JOB_ROUNDS':
+            job_id = data.get('jobId')
+            if not job_id:
+                return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            cleaned, err = validate_rounds(data.get('rounds'))
+            if err:
+                return (json.dumps({'success': False, 'error': err}), 400, headers)
+            q = f"UPDATE `{project_id}.{dataset_id}.jobs` SET interview_rounds = @rounds WHERE job_id = @job_id"
+            p = [
+                bigquery.ScalarQueryParameter('rounds', 'STRING', json.dumps(cleaned)),
+                bigquery.ScalarQueryParameter('job_id', 'STRING', job_id),
+            ]
+            bq_client.query(q, job_config=bigquery.QueryJobConfig(query_parameters=p)).result()
+            return (json.dumps({'success': True, 'rounds': cleaned}), 200, headers)
         
+        # ── GET_SCREENING_FORM ─────────────────────────────────────────────────
+        elif action == 'GET_SCREENING_FORM':
+            job_id       = data.get('jobId')
+            candidate_id = data.get('candidateId')
+            if not all([job_id, candidate_id]):
+                return (json.dumps({'error': 'Missing jobId or candidateId'}), 400, headers)
+
+            form_query = f"""
+                SELECT screening_form_sent_at, screening_form_submitted_at,
+                       TO_JSON_STRING(screening_form) AS screening_form
+                FROM `{project_id}.{dataset_id}.candidates`
+                WHERE job_id = @job_id AND candidate_id = @candidate_id
+                LIMIT 1
+            """
+            form_params = [
+                bigquery.ScalarQueryParameter('job_id',       'STRING', job_id),
+                bigquery.ScalarQueryParameter('candidate_id', 'STRING', candidate_id),
+            ]
+            rows = list(bq_client.query(form_query, job_config=bigquery.QueryJobConfig(query_parameters=form_params)).result())
+            if not rows:
+                return (json.dumps({'success': True, 'sent_at': None, 'submitted_at': None, 'form': None}), 200, headers)
+            r = rows[0]
+            return (json.dumps({
+                'success':      True,
+                'sent_at':      r.screening_form_sent_at.isoformat() if r.screening_form_sent_at else None,
+                'submitted_at': r.screening_form_submitted_at.isoformat() if r.screening_form_submitted_at else None,
+                'form':         json.loads(r.screening_form) if r.screening_form else None,
+            }), 200, headers)
+
+        # ── GET_STAGING_COUNT ──────────────────────────────────────────────────
+        elif action == 'GET_STAGING_COUNT':
+            job_id = data.get('jobId')
+            if not job_id:
+                return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            return (json.dumps({'success': True, 'count': staging_count(job_id)}), 200, headers)
+
+        # ── REQUEST_PROMOTION ──────────────────────────────────────────────────
+        elif action == 'REQUEST_PROMOTION':
+            job_id       = data.get('jobId')
+            requested_by = data.get('requestedBy', '')
+            if not job_id:
+                return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+
+            check_rows = list(bq_client.query(
+                f"""SELECT status FROM `{project_id}.{dataset_id}.promotion_requests`
+                    WHERE job_id = @job_id LIMIT 1""",
+                job_config=bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)
+                ]),
+            ).result())
+            if check_rows and check_rows[0].status in ('REQUESTED', 'RUNNING'):
+                return (json.dumps({'success': True, 'status': check_rows[0].status,
+                                    'message': 'Already in progress'}), 200, headers)
+
+            total = staging_count(job_id)
+            if total == 0:
+                return (json.dumps({'error': 'No resumes waiting for this job'}), 400, headers)
+
+            merge_query = f"""
+                MERGE `{project_id}.{dataset_id}.promotion_requests` T
+                USING (SELECT @job_id AS job_id) S
+                ON T.job_id = S.job_id
+                WHEN MATCHED THEN UPDATE SET
+                    status         = 'REQUESTED',
+                    total_count    = @total,
+                    promoted_count = 0,
+                    requested_by   = @by,
+                    requested_at   = CURRENT_TIMESTAMP(),
+                    updated_at     = CURRENT_TIMESTAMP(),
+                    completed_at   = NULL
+                WHEN NOT MATCHED THEN INSERT
+                    (job_id, status, total_count, promoted_count,
+                     requested_by, requested_at, updated_at)
+                VALUES
+                    (@job_id, 'REQUESTED', @total, 0,
+                     @by, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())
+            """
+            params = [
+                bigquery.ScalarQueryParameter('job_id', 'STRING', job_id),
+                bigquery.ScalarQueryParameter('total',  'INT64',  total),
+                bigquery.ScalarQueryParameter('by',     'STRING', requested_by),
+            ]
+            bq_client.query(merge_query, job_config=bigquery.QueryJobConfig(query_parameters=params)).result()
+            return (json.dumps({'success': True, 'status': 'REQUESTED', 'total': total}), 200, headers)
+
+        # ── GET_PROMOTION_STATUS ───────────────────────────────────────────────
+        elif action == 'GET_PROMOTION_STATUS':
+            job_id = data.get('jobId')
+            if not job_id:
+                return (json.dumps({'error': 'Missing jobId'}), 400, headers)
+            jp  = [bigquery.ScalarQueryParameter('job_id', 'STRING', job_id)]
+            cfg = bigquery.QueryJobConfig(query_parameters=jp)
+
+            rows = list(bq_client.query(f"""SELECT status, total_count, promoted_count, requested_at
+                FROM `{project_id}.{dataset_id}.promotion_requests` WHERE job_id=@job_id LIMIT 1""",
+                job_config=cfg).result())
+            if not rows:
+                return (json.dumps({'success': True, 'status': 'NONE', 'total': 0, 'promoted': 0,
+                                    'processed': 0, 'failed': 0, 'screened': 0, 'pending': 0, 'done': True}), 200, headers)
+            r = rows[0]
+            scfg = bigquery.QueryJobConfig(query_parameters=jp + [
+                bigquery.ScalarQueryParameter('since', 'TIMESTAMP', r.requested_at)])
+
+            rs = list(bq_client.query(f"""
+                SELECT COUNTIF(step IN ('completed','skipped_duplicate')) AS processed,
+                       COUNTIF(step='failed') AS failed,
+                       COUNTIF(step NOT IN ('completed','skipped_duplicate','failed')
+                               AND updated_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 10 MINUTE)) AS in_flight,
+                       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(updated_at), MINUTE) AS idle_min
+                FROM `{project_id}.{dataset_id}.resume_status`
+                WHERE job_id=@job_id AND updated_at >= @since""", job_config=scfg).result())[0]
+            cs = list(bq_client.query(f"""
+                SELECT COUNTIF(screening_status='COMPLETED') AS screened,
+                       COUNTIF(screening_status='PENDING') AS pending
+                FROM `{project_id}.{dataset_id}.candidates`
+                WHERE job_id=@job_id AND applied_at >= @since""", job_config=scfg).result())[0]
+            jr = list(bq_client.query(f"""SELECT pipeline_status FROM `{project_id}.{dataset_id}.jobs`
+                WHERE job_id=@job_id LIMIT 1""", job_config=cfg).result())
+            pstatus = jr[0].pipeline_status if jr else None
+
+            promoted  = int(r.promoted_count or 0)
+            processed, failed = int(rs.processed or 0), int(rs.failed or 0)
+            in_flight, idle   = int(rs.in_flight or 0), int(rs.idle_min or 0)
+            pending           = int(cs.pending or 0)
+            settled = (processed + failed >= promoted) or idle >= 10
+            done = (r.status == 'DONE' and in_flight == 0 and pstatus != 'RUNNING' and settled
+                    and (pending == 0 or pstatus == 'FAILED' or idle >= 10))
+
+            return (json.dumps({
+                'success': True, 'status': r.status,
+                'total': int(r.total_count or 0), 'promoted': promoted,
+                'processed': processed, 'failed': failed,
+                'screened': int(cs.screened or 0), 'pending': pending,
+                'pipeline_running': pstatus == 'RUNNING', 'done': done,
+            }), 200, headers)
+               
         else:
             return (json.dumps({'error': f'Unknown action: {action}'}), 400, headers)
         

@@ -5,6 +5,7 @@ import DashboardLayout from '../components/layout/DashboardLayout';
 import { listJobs, JobSummary } from '../../services/screening';
 import UsersTab from '../components/admin/UsersTab';
 import JobsTab from '../components/admin/JobsTab';
+import { InterviewRound, normalizeRounds, DEFAULT_ROUNDS } from '../../services/roundConfig';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const T = {
@@ -48,6 +49,22 @@ function StatCard({ icon: Icon, accent, bg, value, label, trend }: {
       <div style={{ fontSize: '22px', fontWeight: 700, color: T.text, letterSpacing: '-0.03em', fontFamily: T.font }}>{value}</div>
       <div style={{ fontSize: '11px', color: T.textSub, fontFamily: T.font, marginTop: '2px' }}>{label}</div>
     </div>
+  );
+}
+
+function WorkTypeBadge({ type }: { type?: string }) {
+  if (!type) return null;
+  const styles: Record<string, { bg: string; color: string; border: string }> = {
+    WFO:    { bg: '#F0FDF4', color: '#15803D', border: '#BBF7D0' },
+    WFH:    { bg: T.blueBg,  color: '#1D4ED8', border: '#BFDBFE' },
+    Hybrid: { bg: T.purpleBg, color: '#6D28D9', border: '#DDD6FE' },
+  };
+  const s = styles[type] || styles.WFO;
+  return (
+    <span style={{
+      padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 600,
+      fontFamily: T.font, background: s.bg, color: s.color, border: `0.5px solid ${s.border}`,
+    }}>{type === 'WFO' ? 'In office' : type === 'WFH' ? 'Remote' : type}</span>
   );
 }
 
@@ -111,8 +128,10 @@ function CompactJobRow({ job, isSelected, onToggle, onManage, onRefresh }: {
           <div style={{ fontSize: '12px', fontWeight: 600, color: isSelected ? '#C2540A' : T.text, fontFamily: T.font, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {job.title}
           </div>
-          <div style={{ fontSize: '10px', color: T.gray400, fontFamily: T.font, marginTop: '1px' }}>
-            {job.location && `${job.location} · `}{job.experience_min}–{job.experience_max} yrs
+          <div style={{ fontSize: '10px', color: T.gray400, fontFamily: T.font, marginTop: '1px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+            {job.location && <span>{job.location} ·</span>}
+            {job.work_type && <><WorkTypeBadge type={job.work_type} /><span>·</span></>}
+            <span>{job.experience_min}–{job.experience_max} yrs</span>
           </div>
         </div>
 
@@ -201,6 +220,7 @@ export default function DashboardPage() {
     { label: 'Technical Round 1', n: 0, pct: 0, color: T.blue   },
     { label: 'Technical Round 2', n: 0, pct: 0, color: T.purple },
     { label: 'HR Round',          n: 0, pct: 0, color: T.green  },
+    { label: 'Preboarding',        n: 0, pct: 0, color: T.orange },
   ]);
 
   const [activityFeed, setActivityFeed] = useState<Array<{ color: string; text: string; time: string }>>([]);
@@ -224,13 +244,22 @@ export default function DashboardPage() {
 
     const fetchMetrics = async () => {
       let activeCount = 0, totalScreened = 0, totalShortlisted = 0, totalInterviews = 0;
-      let r1Count = 0, techCount = 0, hrCount = 0;
+      const roundCounts: number[] = [];          // candidates per round position
+      let onboardingCount = 0;
+      let maxRounds = 0;
+      const holder: { rounds: InterviewRound[] | null } = { rounds: null };   // set when ONE job is selected
       const dynamicActivities: Array<{ color: string; text: string; time: string; ts: number }> = [];
       const jobsToProcess = selectedJobId ? jobs.filter(j => j.job_id === selectedJobId) : jobs;
 
       await Promise.all(jobsToProcess.map(async (job) => {
         if (job.status.toLowerCase() === 'active') activeCount++;
         try {
+          const jobRounds: InterviewRound[] = await fetch(DATA_MANAGER_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'GET_JOB_ROUNDS', jobId: job.job_id }),
+          }).then(r => r.json()).then(d => normalizeRounds(d.rounds)).catch(() => DEFAULT_ROUNDS);
+          maxRounds = Math.max(maxRounds, jobRounds.length);
+          if (selectedJobId) holder.rounds = jobRounds;
           const candRes  = await fetch(DATA_MANAGER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'GET_CANDIDATES',  jobId: job.job_id }) });
           const candData = await candRes.json();
           if (candData.success) totalScreened += candData.total_candidates || 0;
@@ -249,12 +278,39 @@ export default function DashboardPage() {
             const techState = timeline.find((t: any) => t.round === 'technical');
             const hrState   = timeline.find((t: any) => t.round === 'hr');
 
-            const INACTIVE = ['not_started', 'rejected', 'Shortlisted'];
-            let currentlyInInterview = false;
-            if      (hrState   && !INACTIVE.includes(hrState.status))   { hrCount++;   currentlyInInterview = true; }
-            else if (techState && !INACTIVE.includes(techState.status)) { techCount++; currentlyInInterview = true; }
-            else if (r1State   && !INACTIVE.includes(r1State.status))   { r1Count++;   currentlyInInterview = true; }
-            if (currentlyInInterview) totalInterviews++;
+            const normStr = (s?: string | null) => String(s || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+            const fbs: any[] = profData.feedback || [];
+            const verdict   = (round: string) => fbs.find(f => normStr(f.round) === round)?.verdict;
+            const hasReject = (round: string) => fbs.some(f => normStr(f.round) === round && normStr(f.verdict) === 'reject');
+            const passed    = (s: any, round: string) =>
+              normStr(s?.status) === 'advanced' ||
+              (normStr(s?.status) === 'feedback_submitted' && normStr(verdict(round)) === 'advance');
+
+            const entryFor = (id: string) => timeline.find((t: any) => normStr(t.round) === id);
+            const lastId   = jobRounds[jobRounds.length - 1].id;
+
+            const isRejected =
+              normStr(cand.candidate_result) === 'rejected' ||
+              jobRounds.some(r => normStr(entryFor(r.id)?.status) === 'rejected' || hasReject(r.id));
+            const isHired =
+              normStr(cand.candidate_result) === 'hired' ||
+              ['hired', 'accepted'].includes(normStr(entryFor(lastId)?.status));
+
+            const inPipeline = ['Interview', 'Selected', 'Hired', 'Rejected'].includes(cand.candidate_result);
+
+            if (inPipeline && !isRejected && !isHired) {
+              let idx = 0;
+              for (let i = jobRounds.length - 1; i >= 0; i--) {
+                const e = entryFor(jobRounds[i].id);
+                if (e) { idx = passed(e, jobRounds[i].id) ? i + 1 : i; break; }
+              }
+              if (idx >= jobRounds.length) {
+                onboardingCount++;                       // not counted as "in interview"
+              } else {
+                roundCounts[idx] = (roundCounts[idx] ?? 0) + 1;
+                totalInterviews++;
+              }
+            }
 
             const jobPrefix = selectedJobId ? '' : `[${job.title}] `;
             if      (hrState?.status === 'advanced')   dynamicActivities.push({ color: T.green,  text: `${jobPrefix}${cand.name} passed the HR Round`,          time: 'Recently', ts: hrState.confirmed_at   ? new Date(hrState.confirmed_at).getTime()   : Date.now() });
@@ -271,11 +327,18 @@ export default function DashboardPage() {
 
       const passRate = totalScreened > 0 ? Math.round((totalShortlisted / totalScreened) * 100) : 0;
       setStats({ activeJobs: activeCount, screened: totalScreened, shortlisted: totalShortlisted, interviews: totalInterviews, passRate });
+      const palette = [T.blue, T.purple, T.green, T.orange, T.blue, T.purple];
+      const pctOf = (n: number) => totalShortlisted > 0 ? Math.round((n / totalShortlisted) * 100) : 0;
+      const roundStages = Array.from({ length: maxRounds }, (_, i) => ({
+        label: holder.rounds?.[i]?.label ?? `Round ${i + 1}`,
+        n:     roundCounts[i] ?? 0,
+        pct:   pctOf(roundCounts[i] ?? 0),
+        color: palette[i % palette.length],
+      }));
       setFunnelStages([
-        { label: 'Shortlisted',       n: totalShortlisted, pct: totalShortlisted > 0 ? 100 : 0,                                                                    color: T.orange },
-        { label: 'Technical Round 1', n: r1Count,   pct: totalShortlisted > 0 ? Math.round((r1Count   / totalShortlisted) * 100) : 0, color: T.blue   },
-        { label: 'Technical Round 2', n: techCount, pct: totalShortlisted > 0 ? Math.round((techCount / totalShortlisted) * 100) : 0, color: T.purple },
-        { label: 'HR Round',          n: hrCount,   pct: totalShortlisted > 0 ? Math.round((hrCount   / totalShortlisted) * 100) : 0, color: T.green  },
+        { label: 'Shortlisted', n: totalShortlisted, pct: totalShortlisted > 0 ? 100 : 0, color: T.orange },
+        ...roundStages,
+        { label: 'Preboarding', n: onboardingCount, pct: pctOf(onboardingCount), color: T.orange },
       ]);
       setActivityFeed(
         dynamicActivities.length > 0
@@ -354,9 +417,9 @@ export default function DashboardPage() {
                   value={stats.activeJobs} label="Active jobs"
                   trend={stats.activeJobs > 0 ? 'Live' : undefined} />
               )}
-              <StatCard icon={Users}  accent={T.blue}   bg={T.blueBg}   value={stats.screened}    label="Candidates screened" trend={selectedJobId ? 'For this job' : 'All Jobs'} />
+              <StatCard icon={Users}  accent={T.blue}   bg={T.blueBg}   value={stats.screened}    label="Candidate Screened" trend={selectedJobId ? 'For this job' : 'All Jobs'} />
               <StatCard icon={Award}  accent={T.purple} bg={T.purpleBg} value={stats.shortlisted} label="Shortlisted"          trend={`${stats.passRate}% pass rate`} />
-              <StatCard icon={Clock}  accent={T.green}  bg={T.greenBg}  value={stats.interviews}  label="In interviews"        trend="Active pipeline" />
+              <StatCard icon={Clock}  accent={T.green}  bg={T.greenBg}  value={stats.interviews}  label="Interviews"        trend="Active pipeline" />
             </div>
 
             {/* ── Main grid ── */}

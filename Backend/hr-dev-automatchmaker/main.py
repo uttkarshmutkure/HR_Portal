@@ -16,7 +16,7 @@ bq_client = bigquery.Client()
 project_id = os.environ.get('GOOGLE_CLOUD_PROJECT', 'atgeir-moae-dev')
 dataset_id = os.environ.get('BQ_DATASET_ID', 'hr_dataset')
 email_api_url = os.environ.get('EMAIL_API_URL', 'https://wb-gateway-7xpbhfkr.an.gateway.dev/hr-screening/send-email')
-test_email = os.environ.get('TEST_EMAIL', 'sayali.mahulkar@atgeirsolutions.com')
+test_email = os.environ.get('TEST_EMAIL', 'mutkureu@gmail.com')
 
 ai_client = genai.Client(
     vertexai=True,
@@ -177,7 +177,7 @@ def auto_matchmaker(request):
 
         def fetch_job():
             return list(bq_client.query(
-                f"SELECT title FROM `{project_id}.{dataset_id}.jobs` "
+                f"SELECT title, interview_rounds FROM `{project_id}.{dataset_id}.jobs` "
                 f"WHERE job_id = '{job_id}' LIMIT 1"
             ))
 
@@ -202,6 +202,19 @@ def auto_matchmaker(request):
         candidate      = cand_results[0]
         selected_slots = json.loads(candidate.slot_selected)
         job_title      = job_rows[0].title if job_rows else job_id
+        # ── Resolve label + duration for this round (supports dynamic rounds) ──
+        round_label    = ROUND_LABELS.get(interview_round, interview_round)
+        round_duration = ROUND_DURATIONS.get(interview_round, 45)
+        if job_rows and job_rows[0].interview_rounds:
+            try:
+                cfg_rounds = json.loads(job_rows[0].interview_rounds)
+                for i, r in enumerate(cfg_rounds):
+                    if r.get('id') == interview_round:
+                        round_label    = r.get('label') or round_label
+                        round_duration = r.get('duration') or (30 if (i == 0 or r.get('kind') == 'hr') else 60)
+                        break
+            except Exception as e:
+                print(f"[MATCHMAKER] Could not parse interview_rounds: {e}")
 
         candidate_name  = candidate.candidate_name
         candidate_email = candidate.candidate_email
@@ -309,8 +322,8 @@ def auto_matchmaker(request):
             slot_date=actual_date,
             slot_start_time=matched_start_time,
             job_title=job_title,
-            round_label=ROUND_LABELS.get(interview_round, interview_round),
-            duration_mins=ROUND_DURATIONS.get(interview_round, 45),
+            round_label=round_label,
+            duration_mins=round_duration,
         )
         print(f"[MATCHMAKER] Meet link: {meet_link}")
 
@@ -330,7 +343,7 @@ def auto_matchmaker(request):
             "candidate_name": candidate_name,
             "interviewer_name": matched_interviewer_name,
             "job_title": job_title,
-            "round": ROUND_LABELS.get(interview_round, interview_round),
+            "round": round_label,
             "date": format_date_human(actual_date),
             "time": format_time_range(matched_start_time, matched_end_time),
             "mode": mode_label,

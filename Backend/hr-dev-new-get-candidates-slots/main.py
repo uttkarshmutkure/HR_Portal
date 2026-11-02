@@ -40,6 +40,10 @@ def get_candidate_slots(request):
 
         mode = request_json.get("mode", "auto")  # "auto" (default) or "manual"
 
+        is_first_round = request_json.get("isFirstRound")
+        if is_first_round is None:
+            is_first_round = (interview_round == "round1")   # old behaviour as fallback
+
         if not job_id or not candidate_id:
             return ({"error": "Missing jobId or candidateId"}, 400, headers)
 
@@ -190,7 +194,7 @@ def get_candidate_slots(request):
         top_slots = unique_slots[:limit]
 
         # ── For round1 only: ensure work-mode diversity in the top 3 ──
-        if interview_round == 'round1' and len(top_slots) == limit:
+        if is_first_round and len(top_slots) == limit:
             modes_in_top = {s['work_mode'] for s in top_slots}
 
             if len(modes_in_top) == 1:

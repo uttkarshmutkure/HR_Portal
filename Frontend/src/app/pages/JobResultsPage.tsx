@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useLocation, Link } from 'react-router';
-import { Briefcase, CheckCircle, AlertTriangle, Users, ArrowRight, Check, X, Eye, RefreshCw, Loader2, Clock } from 'lucide-react';
+import { Briefcase, CheckCircle, AlertTriangle, Users, ArrowRight, Check, X, Eye, RefreshCw, Loader2, Clock, Mail } from 'lucide-react';
+import { EmailService } from '../../services/emailService';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import { useToast } from '../components/ToastContext';
 
@@ -9,6 +10,7 @@ type TabType = 'TOP5' | 'ALL_PASSED' | 'HUMAN_REVIEW' | 'FAILED' | 'REJECTED' | 
 
 const DATA_MANAGER_URL       = import.meta.env.VITE_DATA_MANAGER_URL;
 const UPDATE_STATUS_URL      = import.meta.env.VITE_UPDATE_CANDIDATE_STATUS_URL;
+const CREATE_FORM_LINK_URL = import.meta.env.VITE_CREATE_FORM_LINK_URL;
 
 // ── Confirmation Dialog ────────────────────────────────────────────────────────
 function ConfirmDialog({ message, onConfirm, onCancel, confirmLabel, confirmColor, isLoading = false }: {
@@ -64,6 +66,117 @@ function RejectDialog({ candidateName, onConfirm, onCancel, isLoading = false }:
   );
 }
 
+
+// ── Send JD + Form Modal (preview, then send) ──────────────────────────────────
+function SendFormModal({ cand, jobId, jobTitle, onClose, onSent }: {
+  cand: any; jobId: string; jobTitle: string; onClose: () => void; onSent: () => void;
+}) {
+  const { showToast } = useToast();
+  const [sending, setSending] = useState(false);
+  const jdLink = `${window.location.origin}/careers/${jobId}`;
+
+  const handleSend = async () => {
+    setSending(true);
+    try {
+      // 1. Ask the backend for a signed form link (also records "form sent")
+      const r = await fetch(CREATE_FORM_LINK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, candidate_id: cand.candidate_id }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.token) throw new Error(d.error || 'Could not create form link');
+      const formLink = `${window.location.origin}/candidate-form/${d.token}`;
+
+      // 2. Build and send the email
+      const htmlBody = `
+        <div style="font-family:Inter,sans-serif;max-width:560px;margin:0 auto;background:#fff;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;">
+          <div style="background:#F07C2D;padding:24px 28px;">
+            <div style="font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.02em;">Atgeir Solutions</div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.8);margin-top:2px;">Hiring Team</div>
+          </div>
+          <div style="padding:28px;">
+            <p style="margin:0 0 16px;font-size:14px;color:#374151;">Dear <strong>${cand.name}</strong>,</p>
+            <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
+              Thank you for your interest in the <strong>${jobTitle}</strong> position. Following the initial screening of your profile, we would like to take the next step with you.
+            </p>
+            <p style="margin:0 0 20px;font-size:14px;color:#374151;line-height:1.6;">
+              Please review the job description and fill in a short details form so we can understand your profile better.
+            </p>
+            <a href="${jdLink}" style="display:inline-block;background:#fff;color:#F07C2D;border:1px solid #F07C2D;text-decoration:none;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;margin:0 8px 20px 0;">View Job Description</a>
+            <a href="${formLink}" style="display:inline-block;background:#F07C2D;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:20px;">Fill Candidature Form</a>
+            <p style="margin:0;font-size:13px;color:#6B7280;line-height:1.6;">
+              This link is <strong>personal</strong> — please do not share it with others.
+            </p>
+            <p style="margin:16px 0 0;font-size:13px;color:#374151;">
+              Best regards,<br/><strong>Atgeir Solutions Hiring Team</strong>
+            </p>
+          </div>
+          <div style="padding:0 28px 20px;">
+            <p style="margin:0;font-size:12px;color:#9CA3AF;border-top:1px solid #F3F4F6;padding-top:16px;">
+              For any queries, contact us at
+              <a href="mailto:support@atgeirsolutions.com" style="color:#F07C2D;text-decoration:none;font-weight:500;">support@atgeirsolutions.com</a>
+              or call <span style="font-weight:500;color:#6B7280;">+91 020-41292883</span>
+            </p>
+          </div>
+        </div>
+      `;
+      EmailService.send({ to: cand.email, subject: `Next step — ${jobTitle}`, body: htmlBody });
+      showToast(`Details request sent to ${cand.name}`, 'success');
+      onSent();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to send email.', 'error');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(17,24,39,0.45)', backdropFilter: 'blur(3px)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column', maxHeight: '92vh', boxShadow: '0 25px 40px rgba(0,0,0,0.12)' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '0.5px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#111827', fontFamily: FONT }}>Request Details</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#6B7280', fontFamily: FONT }}>{cand.name} · {cand.email}</p>
+          </div>
+          <button onClick={onClose} disabled={sending} style={{ background: 'none', border: 'none', fontSize: 18, cursor: sending ? 'not-allowed' : 'pointer', color: '#9CA3AF' }}>✕</button>
+        </div>
+
+        <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1, fontFamily: FONT }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Email Preview</label>
+          <div style={{ background: '#F9FAFB', border: '0.5px solid #E5E7EB', borderRadius: 8, padding: '12px 14px', fontSize: 12, color: '#374151', lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: '#F07C2D', marginBottom: 6 }}>Atgeir Solutions — Hiring Team</div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>Subject: Next step — {jobTitle}</div>
+            <div>Dear <strong>{cand.name}</strong>,</div>
+            <div style={{ marginTop: 6 }}>Thank you for your interest in the <strong>{jobTitle}</strong> position. Following the initial screening of your profile, we would like to take the next step with you.</div>
+            <div style={{ marginTop: 6 }}>Please review the job description and fill in a short details form so we can understand your profile better.</div>
+            <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ background: '#fff', color: '#F07C2D', border: '1px solid #F07C2D', padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>View Job Description</span>
+              <span style={{ background: '#F07C2D', color: '#fff', padding: '6px 14px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>Fill Candidature Form</span>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 11, color: '#9CA3AF', borderTop: '1px solid #E5E7EB', paddingTop: 8 }}>
+              For queries: support@atgeirsolutions.com · +91 020-41292883
+            </div>
+          </div>
+          {cand.screening_form_sent_at && (
+            <div style={{ marginTop: 12, background: '#FFFBEB', border: '0.5px solid #FCD34D', borderRadius: 8, padding: '10px 14px', fontSize: 11, color: '#B45309' }}>
+              ⚠ A form was already sent to this candidate. Sending again creates a new link.
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '16px 24px', borderTop: '0.5px solid #E5E7EB', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button disabled={sending} onClick={onClose} style={{ padding: '9px 18px', fontSize: 13, fontWeight: 500, fontFamily: FONT, background: '#F9FAFB', color: '#374151', border: '0.5px solid #E5E7EB', borderRadius: 8, cursor: sending ? 'not-allowed' : 'pointer' }}>Cancel</button>
+          <button disabled={sending || !cand.email} onClick={handleSend} style={{ padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: FONT, background: '#F07C2D', color: '#fff', border: 'none', borderRadius: 8, cursor: sending ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: sending ? 0.7 : 1 }}>
+            {sending && <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />}
+            {sending ? 'Sending...' : 'Send Email'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Stat Card ──────────────────────────────────────────────────────────────────
 function StatCard({ icon: Icon, accent, bg, value, label }: { icon: any; accent: string; bg: string; value: number | string; label: string }) {
   return (
@@ -80,14 +193,14 @@ function StatCard({ icon: Icon, accent, bg, value, label }: { icon: any; accent:
 }
 
 // ── Candidate Row ──────────────────────────────────────────────────────────────
-function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
-  candidate: any; rank: number; jobId: string; isFailed: boolean; onRefresh: () => void;
+function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh, onSendForm }: {
+  candidate: any; rank: number; jobId: string; isFailed: boolean; onRefresh: () => void; onSendForm: (c: any) => void;
 }) {
   const { showToast } = useToast();
   const [confirm, setConfirm] = useState<'shortlist' | 'reject' | 'remove' | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const advancedStages = ['Shortlisted', 'Interview', 'Selected'];
+  const advancedStages = ['Shortlisted', 'Interview', 'Selected', 'Hired'];
   const isAdvanced     = advancedStages.includes(candidate.candidate_result);
   const isRejected     = candidate.candidate_result === 'Rejected';
 
@@ -97,10 +210,9 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
     candidate.overall_result === 'PASS'         ? { bg: '#ECFDF5', color: '#065F46' } :
     candidate.overall_result === 'HUMAN_REVIEW' ? { bg: '#FFFBEB', color: '#B45309' } :
                                                   { bg: '#FEF2F2', color: '#991B1B' };
-    
-  const statusLabel = isRejected ? 'REJECTED' 
-                    : candidate.overall_result === 'HUMAN_REVIEW' ? 'REVIEW' 
-                    : candidate.overall_result;
+
+  const formSent     = !!candidate.screening_form_sent_at;
+  const formReceived = !!candidate.screening_form_submitted_at;
 
   const updateStatus = async (result: string) => {
     try {
@@ -137,23 +249,23 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
       const res = await fetch(DATA_MANAGER_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          type: 'REJECT_CANDIDATE', 
-          jobId: jobId, 
-          candidateId: candidate.candidate_id, 
-          reason 
+        body: JSON.stringify({
+          type: 'REJECT_CANDIDATE',
+          jobId: jobId,
+          candidateId: candidate.candidate_id,
+          reason
         }),
       });
-      
+
       if (!res.ok) throw new Error('Failed to reject candidate');
-      
+
       setConfirm(null);
       showToast(`${candidate.name} has been rejected.`, 'success');
       onRefresh();
     } catch (err: any) {
       showToast(`Failed to update status: ${err.message}`, 'error');
-    } finally { 
-      setIsProcessing(false); 
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -223,46 +335,55 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
 
         {/* Info */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#111827', fontFamily: FONT }}>{candidate.name}</span>
-            
-            {/* ── Single Unified Status Badge ── */}
+
             <span style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', fontWeight: 600, fontFamily: FONT, background: resultBadge.bg, color: resultBadge.color }}>
               {isRejected ? 'REJECTED' : candidate.overall_result === 'HUMAN_REVIEW' ? 'Review' : candidate.overall_result}
             </span>
-            
-            {/* ── Advanced Pipeline Badge ── */}
-            {isAdvanced && <span style={{ fontSize: '9px', background: '#EFF6FF', color: '#1E40AF', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, fontFamily: FONT }}>
-              {candidate.candidate_result === 'Shortlisted' ? 'Shortlisted' : 'In Pipeline'}
-            </span>}
-            
-            {/* Deleted the redundant {isRejected && ...} badge from here */}
+
+            {isAdvanced && (
+              <span style={{ fontSize: '9px', background: '#EFF6FF', color: '#1E40AF', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, fontFamily: FONT }}>
+                {candidate.candidate_result === 'Shortlisted' ? 'Shortlisted' : 'In Pipeline'}
+              </span>
+            )}
+
+            {formReceived && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9px', background: '#ECFDF5', color: '#065F46', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, fontFamily: FONT }}>
+                <Check size={9} /> Form received
+              </span>
+            )}
+            {!formReceived && formSent && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9px', background: '#FFFBEB', color: '#B45309', padding: '2px 8px', borderRadius: '20px', fontWeight: 600, fontFamily: FONT }}>
+                <Clock size={9} /> Awaiting form
+              </span>
+            )}
           </div>
-          
+
           <div style={{ fontSize: '11px', color: '#6B7280', fontFamily: FONT, marginBottom: '6px' }}>
             {candidate.relevant_exp} yrs · {candidate.email} {candidate.phone ? `· ${candidate.phone}` : ''}
           </div>
-          
+
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
             {(candidate.must_have_skills || []).slice(0, 4).map((s: string) => (
               <span key={s} style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: '20px', fontSize: '10px', fontWeight: 500, background: '#FFF7ED', color: '#9A3412', fontFamily: FONT }}>{s}</span>
             ))}
           </div>
-          
+
           {candidate.overall_result === 'HUMAN_REVIEW' && candidate.human_review_reason && candidate.human_review_reason !== 'none' && !isRejected && (
             <div style={{ marginTop: '8px', fontSize: '10px', color: '#B45309', display: 'flex', alignItems: 'flex-start', gap: '5px', background: '#FFFBEB', padding: '6px 10px', borderRadius: '6px', border: '0.5px solid #FCD34D' }}>
               <AlertTriangle size={12} style={{ marginTop: '1px', flexShrink: 0 }} />
               <span style={{ lineHeight: 1.4 }}>{candidate.human_review_reason}</span>
             </div>
           )}
-          
+
           {isFailed && candidate.overall_reason && !isRejected && (
             <div style={{ marginTop: '8px', fontSize: '10px', color: '#991B1B', display: 'flex', alignItems: 'flex-start', gap: '5px', background: '#FEF2F2', padding: '6px 10px', borderRadius: '6px', border: '0.5px solid #FCA5A5' }}>
               <X size={12} style={{ marginTop: '1px', flexShrink: 0 }} />
               <span style={{ lineHeight: 1.4 }}>{candidate.overall_reason}</span>
             </div>
           )}
-          
+
           {isRejected && candidate.reject_reason && (
             <div style={{ marginTop: '8px', fontSize: '10px', color: '#991B1B', display: 'flex', alignItems: 'flex-start', gap: '5px', background: '#FEF2F2', padding: '6px 10px', borderRadius: '6px', border: '0.5px solid #FCA5A5' }}>
               <X size={12} style={{ marginTop: '1px', flexShrink: 0 }} />
@@ -279,6 +400,7 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
             </div>
             <div style={{ fontSize: '9px', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: FONT, marginTop: '3px' }}>AI Match</div>
           </div>
+
           <div style={{ display: 'flex', gap: '6px' }}>
             <Link
               to={`/jobs/${jobId}/candidates/${candidate.candidate_id}`}
@@ -287,6 +409,23 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
             >
               <Eye size={12} /> View
             </Link>
+
+            {!isFailed && !isRejected && !formReceived && (
+              <button
+                onClick={() => onSendForm(candidate)}
+                title={formSent ? 'Send the details request again' : 'Email the job description and the candidature form to the candidate'}
+                style={{
+                  padding: '6px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT,
+                  borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px',
+                  background: formSent ? '#fff' : '#FFF7ED',
+                  color:      formSent ? '#6B7280' : '#C2540A',
+                  border:     formSent ? '0.5px solid #E5E7EB' : '0.5px solid rgba(240,124,45,0.35)',
+                }}
+              >
+                <Mail size={12} /> {formSent ? 'Resend Request' : 'Request Details'}
+              </button>
+            )}
+
             {!isFailed && !isAdvanced && !isRejected && (
               <>
                 <button onClick={() => setConfirm('shortlist')} style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, background: '#F07C2D', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -297,16 +436,17 @@ function CandidateRow({ candidate, rank, jobId, isFailed, onRefresh }: {
                 </button>
               </>
             )}
+
             {(isRejected || isFailed) && (
-              <button 
+              <button
                 disabled
-                onClick={() => setConfirm('remove')} 
+                onClick={() => setConfirm('remove')}
                 title="Candidate removal is currently disabled"
-                style={{ 
-                  padding: '6px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT, 
-                  background: '#f9fafb', color: '#9ca3af', border: '0.5px solid #E5E7EB', 
-                  borderRadius: '6px', cursor: 'not-allowed', display: 'flex', 
-                  alignItems: 'center', gap: '4px', opacity: 0.6 
+                style={{
+                  padding: '6px 12px', fontSize: '11px', fontWeight: 500, fontFamily: FONT,
+                  background: '#f9fafb', color: '#9ca3af', border: '0.5px solid #E5E7EB',
+                  borderRadius: '6px', cursor: 'not-allowed', display: 'flex',
+                  alignItems: 'center', gap: '4px', opacity: 0.6
                 }}
               >
                 <X size={12} /> Remove
@@ -342,6 +482,7 @@ export default function JobResultsPage() {
   const [fetchError,   setFetchError  ] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null);
   const [refreshKey,   setRefreshKey  ] = useState(0);
+  const [formCand,     setFormCand    ] = useState<any | null>(null);
 
   // ── Load candidates from BQ on mount ────────────────────────────────────────
   const loadCandidates = async () => {
@@ -372,7 +513,7 @@ export default function JobResultsPage() {
 
   if (!jobId) return <div>Job not found</div>;
 
-  const isNotAdvanced = (c: any) => !['Shortlisted', 'Interview', 'Selected', 'Rejected'].includes(c.candidate_result);
+  const isNotAdvanced = (c: any) => !['Shortlisted', 'Interview', 'Selected', 'Hired', 'Rejected'].includes(c.candidate_result);
 
   const topCandidates         = (candidates?.top_candidates   ?? []).filter(isNotAdvanced);
   const allPassedCandidates   = (candidates?.all_passed       ?? []).filter(isNotAdvanced);
@@ -394,7 +535,7 @@ export default function JobResultsPage() {
     ...(candidates?.all_rejected ?? [])
   ];
   const shortlistedCount = allScreenedCandidates.filter((c: any) => 
-    ['Shortlisted', 'Interview', 'Selected'].includes(c.candidate_result)
+    ['Shortlisted', 'Interview', 'Selected', 'Hired'].includes(c.candidate_result)
   ).length;
 
   const currentCandidates: any[] =
@@ -418,6 +559,15 @@ export default function JobResultsPage() {
     <DashboardLayout breadcrumb={`Dashboard / Jobs / ${jobId}`}>
       <div style={{ padding: '20px', fontFamily: FONT }}>
 
+        {formCand && (
+          <SendFormModal
+            cand={formCand}
+            jobId={jobId}
+            jobTitle={candidates?.job_title || jobId}
+            onClose={() => setFormCand(null)}
+            onSent={() => { setFormCand(null); setRefreshKey(k => k + 1); }}
+          />
+        )}
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '18px' }}>
           <div>
@@ -521,6 +671,7 @@ export default function JobResultsPage() {
                     jobId={jobId}
                     isFailed={activeTab === 'FAILED' || activeTab === 'REJECTED'}
                     onRefresh={() => setRefreshKey(k => k + 1)}
+                    onSendForm={setFormCand}
                   />
                 ))}
                 {currentCandidates.length === 0 && (

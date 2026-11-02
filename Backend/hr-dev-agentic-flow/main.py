@@ -241,6 +241,50 @@ def count_pending_in_bq(job_id: str) -> int:
     log.info("BQ PENDING count for job=%s: %d", job_id, count)
     return count
 
+def unprocessed_in_gcs(bucket_name: str, job_id: str) -> int:
+    """Kitni PDFs GCS me hain jinka resume_status abhi final (completed/skipped_duplicate/failed) nahi hua."""
+    names = [
+        b.name for b in gcs_client.bucket(bucket_name).list_blobs(prefix=f"resumes/{job_id}/")
+        if b.name.lower().endswith(".pdf")
+    ]
+    if not names:
+        return 0
+    rows = bq_client.query(f"""
+        SELECT file_name FROM `{PROJECT_ID}.{DATASET_ID}.resume_status`
+        WHERE job_id = @job_id
+          AND step IN ('completed', 'skipped_duplicate', 'failed')""",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id)
+        ])).result()
+    done = {r.file_name for r in rows}
+    return sum(1 for n in names if n not in done)
+
+def promotion_in_progress(job_id: str) -> bool:
+    """True while HR's Execute run is still moving resumes for this job."""
+    rows = list(bq_client.query(
+        f"""SELECT status FROM `{PROJECT_ID}.{DATASET_ID}.promotion_requests`
+            WHERE job_id = @job_id LIMIT 1""",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id)
+        ]),
+    ).result())
+    return bool(rows) and rows[0].status in ("REQUESTED", "RUNNING")
+
+def save_applicant_details(job_id: str, candidate_id: str, meta: dict):
+    keep = ("source", "consent", "consent_at", "applied_at")
+    details = {k: v for k, v in (meta or {}).items() if k.startswith("applicant_") or k in keep}
+    if not details or not candidate_id:
+        return
+    bq_client.query(
+        f"""UPDATE `{PROJECT_ID}.{DATASET_ID}.candidates`
+            SET applicant_details = PARSE_JSON(@d)
+            WHERE job_id = @job_id AND candidate_id = @cid""",
+        job_config=bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("d", "STRING", json.dumps(details)),
+            bigquery.ScalarQueryParameter("job_id", "STRING", job_id),
+            bigquery.ScalarQueryParameter("cid", "STRING", candidate_id),
+        ]),
+    ).result()
 
 # ── HELPER: Check job exists or process JD just-in-time ──────────────────────
 
@@ -468,6 +512,9 @@ def gcs_resume_trigger(cloud_event):
             payload         = {"bucket_name": bucket, "file_name": file_path, "job_id": job_id},
         )
         log.info("Resume inserted. candidate_id=%s", candidate_id)
+        meta = data.get("metadata") or {}
+        cid = candidate_id.get("result") if isinstance(candidate_id, dict) else candidate_id
+        save_applicant_details(job_id, cid, meta)
 
     except ValueError as e:
         log.warning("Unprocessable PDF — moving to dead-letter: %s | %s", file_path, e)
@@ -489,34 +536,19 @@ def gcs_resume_trigger(cloud_event):
         log.error("Resume processing failed for %s: %s", file_path, e)
         raise
 
-    # ── 5. Check: are all NEW resumes now in BQ? ─────────────────────────────
-    # Get when pipeline last ran for this job
-    last_ran_row = list(bq_client.query(f"""
-        SELECT pipeline_ran_at FROM `{PROJECT_ID}.{DATASET_ID}.jobs`
-        WHERE job_id = @job_id LIMIT 1
-    """, job_config=bigquery.QueryJobConfig(query_parameters=[
-        bigquery.ScalarQueryParameter("job_id", "STRING", job_id)
-    ])).result())
-    last_ran_at = last_ran_row[0].pipeline_ran_at if last_ran_row else None
-
-    # Count only PDFs uploaded AFTER last pipeline run
-    gcs_bucket_obj = gcs_client.bucket(bucket)
-    gcs_new_count = sum(
-        1 for b in gcs_bucket_obj.list_blobs(prefix=f"resumes/{job_id}/")
-        if b.name.lower().endswith(".pdf")
-        and (last_ran_at is None or b.time_created > last_ran_at)
-    )
-    bq_count = count_pending_in_bq(job_id)
-
-    log.info("New PDFs since last run — GCS: %d | BQ PENDING: %d", gcs_new_count, bq_count)
-
-    if bq_count < gcs_new_count:
-        log.info(
-            "Not all new resumes processed yet (%d/%d). Returning — pipeline will run later.",
-            bq_count, gcs_new_count,
-        )
+    # ── 5. Gate: GCS ki har PDF ka status final hone tak pipeline mat chalao ──
+    if unprocessed_in_gcs(bucket, job_id) > 0:
+        log.info("Some resumes not processed yet for job=%s — deferring pipeline.", job_id)
+        return
+    if count_pending_in_bq(job_id) == 0:
+        log.info("No PENDING candidates for job=%s — nothing to screen.", job_id)
         return
 
+    # ── 5b. Gate: HR's Execute run still moving resumes? Wait for the last batch ──
+    if promotion_in_progress(job_id):
+        log.info("Job %s still has resumes being promoted — deferring pipeline.", job_id)
+        return
+    
     # ── 6. Claim pipeline lock — only one trigger runs the pipeline ───────────
     if not claim_pipeline_run(job_id):
         log.info("Pipeline already claimed by another trigger for job_id=%s. Exiting.", job_id)

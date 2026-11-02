@@ -1,5 +1,4 @@
 import { createBrowserRouter } from "react-router";
-import LandingPage             from "./pages/LandingPage";
 import DashboardPage           from "./pages/DashboardPage"; 
 import JobListPage             from "./pages/JobListPage";
 import JobResultsPage          from "./pages/JobResultsPage";
@@ -13,7 +12,10 @@ import OfferGenerationPage     from "./pages/OfferGenerationPage"; // <-- NEW IM
 import LoginPage               from "./pages/LoginPage";
 import ProtectedRoute          from "./components/ProtectedRoute";
 import CandidateReviewPage     from "./pages/CandidateReviewPage";
-
+import CareersPage             from "./pages/CareersPage";
+import CareerJobPage           from "./pages/CareerJobPage";
+import CandidateFormPage       from "./pages/CandidateFormPage";
+import PreboardingUploadPage   from "./pages/PreboardingUploadPage";
 // ── Import the Global Hub Pages ──
 import { 
   GlobalShortlistedPage, 
@@ -25,7 +27,7 @@ import {
 export const router = createBrowserRouter([
   {
     path: "/",
-    Component: LandingPage,
+    Component: LoginPage,
   },
   {
     path: "/login",
@@ -129,6 +131,16 @@ export const router = createBrowserRouter([
     ),
   },
   
+  // ── Public careers site (no auth) ──
+  {
+    path: "/careers",
+    Component: CareersPage,
+  },
+  {
+    path: "/careers/:jobId",
+    Component: CareerJobPage,
+  },
+
   // ── Public feedback link (no auth) ──
   {
     path: "/feedback/:token",
@@ -140,10 +152,19 @@ export const router = createBrowserRouter([
     path: "/schedule/:token",
     Component: CandidateSlotPage,
   },
-
+  // ── Public candidate details form (no auth) ──
+  {
+    path: "/candidate-form/:token",
+    Component: CandidateFormPage,
+  },
   // ── Public candidate review link (no auth) ──
   {
     path: "/candidate-review/:token",
     Component: CandidateReviewPage,
+  },
+  // ── Public preboarding document upload link (no auth) ──
+  {
+    path: "/preboarding/:token",
+    Component: PreboardingUploadPage,
   },
 ]);

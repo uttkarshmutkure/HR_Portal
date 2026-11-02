@@ -174,6 +174,36 @@ def _set_status(user_id, status, requester_email):
 
 
 @functions_framework.http
+def _delete_user(user_id, requester_email):
+    if not user_id:
+        return ({"success": False, "error": "user_id is required"}, 400)
+
+    target = _get_user_by_id(user_id)
+    if not target:
+        return ({"success": False, "error": "User not found"}, 404)
+
+    if target.email == requester_email:
+        return ({"success": False, "error": "You cannot delete your own account"}, 400)
+
+    # Never delete the last active HR, or nobody can manage the system
+    target_roles = [r.strip() for r in (target.roles or "").split(",")]
+    if "hr" in target_roles and target.status == "active":
+        count_q = f"""
+            SELECT COUNT(*) AS n FROM `{TABLE_ID}`
+            WHERE status = 'active' AND user_id != @user_id
+              AND 'hr' IN UNNEST(SPLIT(REPLACE(roles, ' ', ''), ','))
+        """
+        cfg = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("user_id", "STRING", user_id)])
+        n = list(bq_client.query(count_q, job_config=cfg).result())[0].n
+        if n == 0:
+            return ({"success": False, "error": "You cannot delete the last active HR user"}, 400)
+
+    cfg = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ScalarQueryParameter("user_id", "STRING", user_id)])
+    bq_client.query(f"DELETE FROM `{TABLE_ID}` WHERE user_id = @user_id", job_config=cfg).result()
+    return ({"success": True}, 200)
+
 def manage_users(request):
     if request.method == "OPTIONS":
         return _cors_preflight()
@@ -209,6 +239,10 @@ def manage_users(request):
             result, status_code = _set_status(
                 body.get("user_id"), body.get("status"), requester_email
             )
+            return (result, status_code, CORS_HEADERS)
+
+        elif action == "DELETE_USER":
+            result, status_code = _delete_user(body.get("user_id"), requester_email)
             return (result, status_code, CORS_HEADERS)
 
         else:

@@ -63,6 +63,8 @@ export interface JobSummary {
   job_id:           string;
   title:            string;
   location:         string;
+  work_type:        string; 
+  referral_enabled: boolean;
   description:      string;
   must_have_skills: string[];   // parsed from comma-separated string by Cloud Function
   preferred_skills: string[];   // parsed from comma-separated string by Cloud Function

@@ -27,31 +27,22 @@ def check_login(request):
         if not request_json:
             return ({"error": "Invalid JSON payload"}, 400, headers)
 
-        email = request_json.get("email")
-        requested_role = request_json.get("role")  # "hr" or "interviewer"
-
-        if not email or not requested_role:
-            return ({"error": "Missing email or role"}, 400, headers)
+        email = (request_json.get("email") or "").strip().lower()
+        if not email:
+            return ({"error": "Missing email"}, 400, headers)
 
         project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "atgeir-moae-dev")
         dataset_id = os.environ.get("BQ_DATASET_ID", "hr_dataset")
         table_id = f"{project_id}.{dataset_id}.users"
 
         query = f"""
-            SELECT
-                ANY_VALUE(user_id) AS user_id,
-                email,
-                ANY_VALUE(name) AS name,
-                STRING_AGG(DISTINCT role, ',') AS roles,
-                ANY_VALUE(status) AS status
-            FROM `{table_id}`, UNNEST(SPLIT(roles, ',')) AS role
-            WHERE email = @email
-            GROUP BY email
+            SELECT user_id, email, name, roles, status
+            FROM `{table_id}`
+            WHERE LOWER(email) = @email
+            LIMIT 1
         """
         job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("email", "STRING", email),
-            ]
+            query_parameters=[bigquery.ScalarQueryParameter("email", "STRING", email)]
         )
         results = list(bq_client.query(query, job_config=job_config).result())
 
@@ -63,17 +54,15 @@ def check_login(request):
         if row.status != "active":
             return ({"allowed": False, "reason": "This account has been disabled."}, 200, headers)
 
-        user_roles = [r.strip() for r in row.roles.split(",")]
-
-        if requested_role not in user_roles:
-            role_label = {"hr": "HR", "interviewer": "Interviewer"}.get(requested_role, requested_role)
-            return ({"allowed": False, "reason": f"You don't have permission to log in as {role_label}."}, 200, headers)
+        user_roles = [r.strip() for r in (row.roles or "").split(",") if r.strip()]
+        if not user_roles:
+            return ({"allowed": False, "reason": "No role is assigned to this account."}, 200, headers)
 
         # Update last_login_at
         update_query = f"""
             UPDATE `{table_id}`
             SET last_login_at = CURRENT_TIMESTAMP()
-            WHERE email = @email
+            WHERE LOWER(email) = @email
         """
         bq_client.query(update_query, job_config=job_config).result()
 
@@ -93,4 +82,4 @@ def check_login(request):
 
     except Exception as e:
         print(f"Error checking login: {e}")
-        return ({"error": str(e)}, 500, headers)
+        return ({"error": "Something went wrong. Please try again."}, 500, headers)

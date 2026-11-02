@@ -1,14 +1,15 @@
 import { createContext, useContext, useState, ReactNode } from "react";
-import { signInWithPopup, signOut } from "firebase/auth";
-import { auth, googleProvider } from "../../firebase";
+import { signOut } from "firebase/auth";
+import { auth } from "../../firebase";
 import { clearHrChatStore } from "./layout/HrChatWidget";
+
 export type Role = "hr" | "interviewer" | "user";
 
 interface AuthUser {
   id: string;
   name: string;
   email: string;
-  roles: Role[]; // a user can have one or both roles
+  roles: Role[];
 }
 
 interface StoredSession {
@@ -17,22 +18,30 @@ interface StoredSession {
   loginTimestamp: number;
 }
 
+export interface LoginResult {
+  error: string | null;
+  activeRole: Role | null;
+}
+
 interface AuthContextType {
   user: AuthUser | null;
   activeRole: Role | null;
   isAuthenticated: boolean;
-  sessionExpired: boolean; // true only if a session existed but has timed out
-  // returns null on success, or an error message string on failure
-  // login: (requestedRole: Role) => Promise<string | null>;
-  login: (email: string, requestedRole: Role) => Promise<string | null>;
+  sessionExpired: boolean;
+  login: (email: string) => Promise<LoginResult>;
+  switchRole: (role: Role) => void; // for users who have more than one role
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SESSION_KEY = "hiredesk_session";
-const SESSION_DURATION_MS = 1 * 60 * 60 * 1000; // 8 hours
+const SESSION_DURATION_MS = 1 * 60 * 60 * 1000; // 1 hour
 const CHECK_LOGIN_URL = import.meta.env.VITE_CHECK_LOGIN_URL as string;
+
+// If someone has several roles, they land on the first match in this list
+const ROLE_PRIORITY: Role[] = ["hr", "interviewer", "user"];
+
 function readSession(): StoredSession | null {
   const raw = localStorage.getItem(SESSION_KEY);
   if (!raw) return null;
@@ -54,35 +63,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeRole, setActiveRole] = useState<Role | null>(initial?.activeRole ?? null);
   const [sessionExpired, setSessionExpired] = useState<boolean>(!initial && hadExpiredSession());
 
-  /* ── TEMP: Google popup login, commented out for testing ────────────────
-  async function login(requestedRole: Role): Promise<string | null> {
-    let verifiedEmail: string;
-
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      if (!result.user.email) {
-        await signOut(auth);
-        return "Could not read email from Google account.";
-      }
-      verifiedEmail = result.user.email;
-    } catch (err) {
-      return "Google sign-in failed or was cancelled.";
-    }
-
+  async function login(email: string): Promise<LoginResult> {
     let data: any;
     try {
       const res = await fetch(CHECK_LOGIN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: verifiedEmail, role: requestedRole }),
+        body: JSON.stringify({ email }),
       });
       data = await res.json();
-    } catch (err) {
-      return "Could not reach the server. Please try again.";
+    } catch {
+      return { error: "Could not reach the server. Please try again.", activeRole: null };
     }
 
     if (!data.allowed) {
-      return data.reason || "Login failed.";
+      return { error: data.reason || data.error || "Login failed.", activeRole: null };
     }
 
     const fetchedUser: AuthUser = {
@@ -92,56 +87,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       roles: data.user.roles,
     };
 
+    const chosenRole = ROLE_PRIORITY.find((r) => fetchedUser.roles.includes(r));
+    if (!chosenRole) {
+      return { error: "No valid role is assigned to this account.", activeRole: null };
+    }
+
     const session: StoredSession = {
       user: fetchedUser,
-      activeRole: requestedRole,
+      activeRole: chosenRole,
       loginTimestamp: Date.now(),
     };
 
     setUser(fetchedUser);
-    setActiveRole(requestedRole);
+    setActiveRole(chosenRole);
     setSessionExpired(false);
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    return null;
+    return { error: null, activeRole: chosenRole };
   }
-  ── END TEMP comment-out ─────────────────────────────────────────────── */
 
-  // ── TEMP: direct email login for testing per-interviewer visibility ──────
-  async function login(email: string, requestedRole: Role): Promise<string | null> {
-    let data: any;
-    try {
-      const res = await fetch(CHECK_LOGIN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role: requestedRole }),
-      });
-      data = await res.json();
-    } catch (err) {
-      return "Could not reach the server. Please try again.";
+  function switchRole(role: Role) {
+    if (!user || !user.roles.includes(role)) return;
+    setActiveRole(role);
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const session: StoredSession = JSON.parse(raw);
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, activeRole: role }));
     }
-
-    if (!data.allowed) {
-      return data.reason || "Login failed.";
-    }
-
-    const fetchedUser: AuthUser = {
-      id: data.user.id,
-      name: data.user.name,
-      email: data.user.email,
-      roles: data.user.roles,
-    };
-
-    const session: StoredSession = {
-      user: fetchedUser,
-      activeRole: requestedRole,
-      loginTimestamp: Date.now(),
-    };
-
-    setUser(fetchedUser);
-    setActiveRole(requestedRole);
-    setSessionExpired(false);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    return null;
   }
 
   function logout() {
@@ -155,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, activeRole, isAuthenticated: !!user, sessionExpired, login, logout }}
+      value={{ user, activeRole, isAuthenticated: !!user, sessionExpired, login, switchRole, logout }}
     >
       {children}
     </AuthContext.Provider>
@@ -167,13 +138,3 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
   return ctx;
 }
-
-// // ── Placeholder only — delete once Firebase Auth + Firestore roles are wired in ──
-// async function mockFetchUser(email: string): Promise<AuthUser | null> {
-//   const fakeDb: Record<string, AuthUser> = {
-//     "hr@atgeir.com": { id: "1", name: "HR User", email, roles: ["hr"] },
-//     "interviewer@atgeir.com": { id: "2", name: "Interviewer User", email, roles: ["interviewer"] },
-//     "both@atgeir.com": { id: "3", name: "Dual Role User", email, roles: ["hr", "interviewer"] },
-//   };
-//   return fakeDb[email] ?? null;
-// }

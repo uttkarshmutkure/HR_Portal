@@ -43,6 +43,7 @@ JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$")
 
 CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
 
+VALID_WORK_TYPES = ("WFO", "WFH", "Hybrid")
 # Columns an admin is allowed to edit, with their BigQuery types.
 EDITABLE_FIELDS = {
     "title": "STRING",
@@ -52,6 +53,7 @@ EDITABLE_FIELDS = {
     "experience_min": "INT64",
     "experience_max": "INT64",
     "location": "STRING",
+    "work_type": "STRING",
     "recruiter_email": "STRING",
 }
 SKILL_FIELDS = ("must_have_skills", "preferred_skills")
@@ -136,7 +138,7 @@ def _list_jobs(include_archived):
     where = "" if include_archived else "WHERE COALESCE(status, '') != 'archived'"
     query = f"""
         SELECT job_id, title, description, must_have_skills, preferred_skills,
-               experience_min, experience_max, location, recruiter_email, status,
+               experience_min, experience_max, location, work_type, referral_enabled, recruiter_email, status,
                created_at, pipeline_status, pipeline_error, pipeline_ran_at
         FROM `{JOBS_TABLE}`
         {where}
@@ -153,6 +155,8 @@ def _list_jobs(include_archived):
             "experience_min": r.experience_min,
             "experience_max": r.experience_max,
             "location": r.location,
+            "work_type": r.work_type,
+            "referral_enabled": r.referral_enabled is not False,
             "recruiter_email": r.recruiter_email,
             "status": r.status,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -171,6 +175,8 @@ def _create_job_from_pdf(form, files, requester_email):
     """
     job_id = (form.get("job_id") or "").strip()
     designation = (form.get("designation") or "").strip()
+    location = (form.get("location") or "").strip()
+    work_type = (form.get("work_type") or "").strip()
     upload = files.get("file")
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -179,6 +185,10 @@ def _create_job_from_pdf(form, files, requester_email):
     if not JOB_ID_RE.match(job_id):
         return ({"success": False,
                  "error": "Job ID can only contain letters, numbers, '-' and '_' (2-64 characters)"}, 400)
+    if not location:
+        return ({"success": False, "error": "Location is required"}, 400)
+    if work_type not in VALID_WORK_TYPES:
+        return ({"success": False, "error": "Work type must be WFO, WFH or Hybrid"}, 400)
     if upload is None or not upload.filename:
         return ({"success": False, "error": "JD file (PDF) is required"}, 400)
     if not upload.filename.lower().endswith(".pdf"):
@@ -233,19 +243,22 @@ def _create_job_from_pdf(form, files, requester_email):
     try:
         cfg = bigquery.QueryJobConfig(query_parameters=[
             _param("title", designation or row.get("title") or "", "STRING"),
+            _param("location", location, "STRING"),
+            _param("work_type", work_type, "STRING"),
             _param("fallback_email", requester_email or "", "STRING"),
             _param("job_id", job_id, "STRING"),
         ])
         bq_client.query(f"""
             UPDATE `{JOBS_TABLE}`
             SET title = @title,
+                location = @location,
+                work_type = @work_type,
                 recruiter_email = IF(COALESCE(recruiter_email, '') = '',
                                      @fallback_email, recruiter_email)
             WHERE job_id = @job_id
         """, job_config=cfg).result()
     except Exception as e:
-        # Job is already created and usable — don't fail the whole request
-        print(f"Post-create title/email update failed for {job_id}: {e}")
+        print(f"Post-create update failed for {job_id}: {e}")
 
     return ({"success": True, "job_id": job_id}, 200)
 
@@ -268,6 +281,11 @@ def _update_job(body):
     for key in ("title", "description", "must_have_skills"):
         if key in fields and not fields[key]:
             return ({"success": False, "error": f"{key} cannot be empty"}, 400)
+
+    if "location" in fields and not fields["location"]:
+        return ({"success": False, "error": "location cannot be empty"}, 400)
+    if "work_type" in fields and fields["work_type"] not in VALID_WORK_TYPES:
+        return ({"success": False, "error": "Work type must be WFO, WFH or Hybrid"}, 400)
 
     new_min = fields.get("experience_min", existing.experience_min)
     new_max = fields.get("experience_max", existing.experience_max)
@@ -297,6 +315,22 @@ def _set_job_status(job_id, new_status):
     bq_client.query(query, job_config=cfg).result()
     return ({"success": True}, 200)
 
+def _set_referral(job_id, enabled):
+    if not job_id:
+        return ({"success": False, "error": "job_id is required"}, 400)
+    if not isinstance(enabled, bool):
+        return ({"success": False, "error": "enabled must be true or false"}, 400)
+    if not _get_job(job_id):
+        return ({"success": False, "error": "Job not found"}, 404)
+    cfg = bigquery.QueryJobConfig(query_parameters=[
+        _param("enabled", enabled, "BOOL"),
+        _param("job_id", job_id, "STRING"),
+    ])
+    bq_client.query(
+        f"UPDATE `{JOBS_TABLE}` SET referral_enabled = @enabled WHERE job_id = @job_id",
+        job_config=cfg,
+    ).result()
+    return ({"success": True}, 200)
 
 def _delete_job(job_id):
     """
@@ -372,6 +406,8 @@ def manage_jobs(request):
         elif action == "RESTORE_JOB":
             # Restores to 'closed', not 'active', so restoring never silently reopens hiring.
             result, code = _set_job_status(body.get("job_id"), "closed")
+        elif action == "SET_REFERRAL":
+            result, code = _set_referral(body.get("job_id"), body.get("enabled"))
         else:
             result, code = ({"success": False, "error": f"Unknown action type: {action}"}, 400)
 

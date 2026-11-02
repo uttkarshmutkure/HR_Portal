@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Plus, X, UserSquare2, Building2, Power, User, Search } from 'lucide-react';
+import { Loader2, Plus, X, UserSquare2, Building2, Power, User, Search, Trash2 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
-import { listUsers, grantAccess, setUserStatus, AdminUser, UserRole } from '../../../services/adminUsers';
+import { listUsers, grantAccess, setUserStatus, deleteUser, AdminUser, UserRole } from '../../../services/adminUsers';
 
 const FONT = 'Inter, sans-serif';
 const T = {
@@ -196,6 +196,8 @@ export default function UsersTab() {
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<AdminUser | null>(null);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const loadUsers = async () => {
@@ -222,7 +224,7 @@ export default function UsersTab() {
     const newStatus = confirmTarget.status === 'active' ? 'disabled' : 'active';
     try {
       await setUserStatus(user.email, confirmTarget.user_id, newStatus);
-      showToast(`${confirmTarget.name} ${newStatus === 'active' ? 'enabled' : 'disabled'}`, 'success');
+      showToast(`Access ${newStatus === 'active' ? 'enabled' : 'disabled'}`, 'success');
       setConfirmTarget(null);
       loadUsers();
     } catch (err: any) {
@@ -231,6 +233,22 @@ export default function UsersTab() {
       setIsTogglingStatus(false);
     }
   };
+
+  const handleDelete = async () => {
+    if (!deleteTarget || !user?.email) return;
+    setIsDeleting(true);
+    try {
+      await deleteUser(user.email, deleteTarget.user_id);
+      showToast('Access deleted', 'success');
+      setDeleteTarget(null);
+      loadUsers();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete user', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const q = searchQuery.trim().toLowerCase();
   const visibleUsers = users.filter(u => !q ||
     u.name.toLowerCase().includes(q) ||
@@ -257,6 +275,17 @@ export default function UsersTab() {
           onConfirm={handleToggleStatus}
           onCancel={() => !isTogglingStatus && setConfirmTarget(null)}
           isLoading={isTogglingStatus}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          message={`Permanently delete ${deleteTarget.name} (${deleteTarget.email})? They will lose all access. This cannot be undone. To block them temporarily, use Disable instead.`}
+          confirmLabel="Delete"
+          confirmColor={T.red}
+          onConfirm={handleDelete}
+          onCancel={() => !isDeleting && setDeleteTarget(null)}
+          isLoading={isDeleting}
         />
       )}
 
@@ -349,6 +378,20 @@ export default function UsersTab() {
                 >
                   <Power size={11} /> {u.status === 'active' ? 'Disable' : 'Enable'}
                 </button>
+
+                {u.email !== user?.email && (
+                  <button
+                    onClick={() => setDeleteTarget(u)}
+                    title="Delete user permanently"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      padding: '5px 10px', fontSize: '11px', fontWeight: 500, borderRadius: '6px', cursor: 'pointer',
+                      background: T.redBg, color: T.red, border: '0.5px solid #FCA5A5',
+                    }}
+                  >
+                    <Trash2 size={11} /> Delete
+                  </button>
+                )}
               </div>
             </div>
           ))

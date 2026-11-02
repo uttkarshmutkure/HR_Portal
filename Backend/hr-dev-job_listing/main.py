@@ -61,12 +61,14 @@ def _serialize(obj):
 
 # ── BigQuery query ────────────────────────────────────────────────────────────
 
-def fetch_jobs(status_filter: str | None = None) -> list[dict]:
+def fetch_jobs(status_filter: str | None = None, public_only: bool = False) -> list[dict]:
     """
     Query the jobs table and return all rows.
     Excludes jd_embedding (768-float array) — too large for frontend.
     Optionally filter by status (case-insensitive).
     """
+    if public_only:
+        status_filter = "active" 
     client = bigquery.Client(project=PROJECT_ID)
 
     # Build WHERE clause only when a filter is given
@@ -84,6 +86,8 @@ def fetch_jobs(status_filter: str | None = None) -> list[dict]:
             job_id,
             title,
             location,
+            work_type,
+            referral_enabled,
             description,
             must_have_skills,
             preferred_skills,
@@ -91,7 +95,7 @@ def fetch_jobs(status_filter: str | None = None) -> list[dict]:
             experience_max,
             status,
             recruiter_email,
-            created_at
+            created_at,
         FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
         {where_clause}
         ORDER BY created_at DESC
@@ -104,9 +108,11 @@ def fetch_jobs(status_filter: str | None = None) -> list[dict]:
 
     for row in rows:
         record = dict(row)
+        record["referral_enabled"] = record.get("referral_enabled") is not False
+        if public_only:
+            record.pop("recruiter_email", None)
 
         # must_have_skills and preferred_skills stored as comma-separated strings
-        # Split into arrays for easier frontend consumption
         for field in ("must_have_skills", "preferred_skills"):
             raw = record.get(field) or ""
             record[field] = [s.strip() for s in raw.split(",") if s.strip()]
@@ -148,9 +154,10 @@ def list_jobs(request):
             return _error("Invalid JSON body")
         status_filter = body.get("status", status_filter)
 
+    public_only = request.args.get("public", "") == "1"
     # Fetch from BigQuery
     try:
-        jobs = fetch_jobs(status_filter=status_filter)
+        jobs = fetch_jobs(status_filter=status_filter, public_only=public_only)
         return _json_response({
             "success"  : True,
             "total"    : len(jobs),
